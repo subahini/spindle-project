@@ -1,0 +1,39 @@
+.venv
+__pycache__/
+*.pyc
+*.log
+data/
+results/
+code/models
+code/model
+code/results
+code/data
+.idea
+
+
+
+
+
+# Python
+
+*.py[cod]
+*.so
+*.ipynb_checkpoints/
+
+# Jupyter notebooks
+.ipynb_checkpoints/
+
+# Virtual environments
+.venv/
+
+# Data
+*.npy
+*.npz
+*.h5
+*.pkl
+*.csv
+
+# System
+.DS_Store
+EOF
+.ipynb_checkpoints

@@ -1,0 +1,16 @@
+
+
+
+#python 3.8
+
+
+
+torch
+mne
+numpy
+pandas
+boto3
+pyyaml
+scikit-learn
+matplotlib
+seaborn

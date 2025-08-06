@@ -1,0 +1,16 @@
+lakefs:
+  endpoint: https://dbe-lakefs.dbe.unibas.ch:8000
+  repo: eeg-sleep-spindles-2025
+  key: main/SeLECTS_Data_SpindleDetection/SeLECTS_Data_SpindleDetection/EDFraw_Data_anon/P002_1_raw.edf
+
+paths:
+  raw_local: data/raw/P002_1_raw.edf
+  processed_local: data/processed/P002_1_cleaned.edf
+
+labels:
+  key: main/SeLECTS_Data_SpindleDetection/SeLECTS_Data_SpindleDetection/Epilog_Spindles/sleep_block_spindle_output_P002_1.json
+  local: data/labels/sleep_block_spindle_output_P002_1.json
+filter:
+  l_freq: 1.0
+  h_freq: 30.0
+
