@@ -142,7 +142,7 @@ class UNet1D(nn.Module):
         self.conv = nn.Conv1d(in_channels=features, out_channels=out_channels, kernel_size=1)
 
     def forward(self, x):
-        x = x.squeeze(1)                                  #                               error in size shape
+        #x = x.squeeze(1)                                  #                               error in size shape
         enc1 = self.encoder1(x)      # [B, 64, T]
         enc2 = self.encoder2(self.pool1(enc1))  # [B, 128, T/2]
         enc3 = self.encoder3(self.pool2(enc2))  # [B, 256, T/4]

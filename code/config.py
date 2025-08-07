@@ -37,6 +37,7 @@ class Config:
     LEARNING_RATE = 5e-5  # Very low learning rate for stability
     WEIGHT_DECAY = 1e-4
     PATIENCE = 10
+    DOWNSAMPLE = True  # enable downsampling
 
     # Data splits (in seconds)
     TRAIN_START = 0

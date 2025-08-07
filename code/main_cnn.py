@@ -10,6 +10,7 @@ from pathlib import Path
 from models import  SpindleCNN , UNet1D
 from metrics import CustomMetrics
 from data_loader import load_and_preprocess_data, load_spindle_labels, create_windows, get_data_loaders
+
 from trainer import train_model
 from config import Config
 
@@ -31,18 +32,8 @@ def main():
         raw, sfreq = load_and_preprocess_data()
         spindles = load_spindle_labels()
 
-        # Create data splits
-        '''
-        print("\n2. CREATING DATA SPLITS")
-        print("-" * 40)
-        create_windows(raw, sfreq, spindles, config.TRAIN_START, config.TRAIN_END, "train")
-        create_windows(raw, sfreq, spindles, config.TEST_START, config.TEST_END, "test")
-        create_windows(raw, sfreq, spindles, config.VAL_START, config.VAL_END, "val")'''
-
-        # Get data loaders
-        train_loader, val_loader, test_loader = get_data_loaders()
-
-        # ===MY MODEL CNN ===
+        print(" MODEL: UNet1d , 7% overlap , Focal loss with alph 75_downsample majority class")
+        # MY MODEL
         print("\n3. TRAINING THE MODEL")
         print("-" * 40)
 
@@ -52,6 +43,17 @@ def main():
        # model_name = "SpindleCNN"
         model = UNet1D().to(config.DEVICE)
         model_name = "UNet1D"
+
+        # Create data splits
+
+        print("\n2. CREATING DATA SPLITS")
+        print("-" * 40)
+        create_windows(raw, sfreq, spindles, config.TRAIN_START, config.TRAIN_END, "train",model_name)   # for 1d and 2 d we nedd dift data set
+        create_windows(raw, sfreq, spindles, config.TEST_START, config.TEST_END, "test",model_name)
+        create_windows(raw, sfreq, spindles, config.VAL_START, config.VAL_END, "val",model_name)
+
+        # Get data loaders
+        train_loader, val_loader, test_loader = get_data_loaders()
 
         print(f"Selected Model: {model_name}")
         print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")

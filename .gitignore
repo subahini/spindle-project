@@ -13,7 +13,7 @@ code/data
 
 
 
-
+cat > .gitignore << EOF
 # Python
 
 *.py[cod]
@@ -36,4 +36,5 @@ code/data
 # System
 .DS_Store
 EOF
+
 .ipynb_checkpoints

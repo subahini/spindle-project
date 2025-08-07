@@ -2,6 +2,9 @@ import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 import time
+
+from sympy.abc import alpha
+
 from metrics import CustomMetrics
 from models import FocalLoss
 from config import Config
@@ -42,7 +45,8 @@ def calculate_class_weights(train_loader, device):
     n_neg = int(len(train_labels) - n_pos)
 
     # Cap weight to prevent over-correction
-    pos_weight_value = min(n_neg / max(n_pos, 1), 2.5)
+    pos_weight_value = min(n_neg / max(n_pos, 1), 1)
+
     pos_weight = torch.tensor([pos_weight_value], dtype=torch.float32).to(device)
 
     print(f"Class distribution - Positive: {n_pos}, Negative: {n_neg}")
@@ -59,11 +63,11 @@ def train_model(model, train_loader, val_loader, device, model_name="CNN"):
     # Calculate class weights
     pos_weight = calculate_class_weights(train_loader, device)
 
-   # criterion = FocalLoss(alpha=0.25, gamma=2.0)
-   # print(f"loss focal loss {pos_weight}")
+    criterion = FocalLoss(alpha=0.75, gamma=2.0)
+    print(f"loss focal loss with alpha{alpha}")
    # criterion = nn.CrossEntropyLoss()
-    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-    print(f" BCE loss entropy loss {pos_weight}")
+    #criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    #print(f" BCE loss entropy loss {pos_weight}")
 
     # Optimizer with very low learning rate
     optimizer = optim.Adam(model.parameters(), lr=config.LEARNING_RATE, weight_decay=config.WEIGHT_DECAY)
@@ -146,4 +150,5 @@ def train_model(model, train_loader, val_loader, device, model_name="CNN"):
         'val_metrics_history': val_metrics_history,
         'best_val_f1': best_val_f1,
         'best_model_state': best_model_state,
+        'total_time': time.time() - start_time    #time error
     }
