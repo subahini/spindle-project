@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader ,WeightedRandomSampler
 from dataset import build_splits
 
 def make_loaders(cfg) -> Tuple[DataLoader, DataLoader, DataLoader]:
-    train_set, val_set, test_set = build_splits(cfg)
+    train_set, val_set, test_set = build_splits(cfg)     # building three data set
 
     use_weighted = hasattr(cfg.data, "sampler") and getattr(cfg.data.sampler, "kind", "") == "weighted"
     if use_weighted:

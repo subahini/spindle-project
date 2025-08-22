@@ -78,7 +78,7 @@ class UNet1D_Sample(nn.Module):
 
 
 # ----- TCN1D  ---------------------------------------------
-
+"""
 class Chomp1d(nn.Module):
     def __init__(self, n): super().__init__(); self.n = n
     def forward(self, x): return x[:, :, :-self.n].contiguous() if self.n > 0 else x
@@ -93,20 +93,4 @@ class TemporalBlock(nn.Module):
             nn.Conv1d(n_out, n_out, k, padding=pad, dilation=dil), Chomp1d(pad),
             nn.ReLU(inplace=True), nn.BatchNorm1d(n_out), nn.Dropout(dropout),
         )
-        self.down = nn.Conv1d(n_in, n_out, 1) if n_in != n_out else nn.Identity()
-    def forward(self, x):
-        out = self.net(x); res = self.down(x); return torch.relu(out + res)
-
-class TCN1D_Sample(nn.Module):
-    def __init__(self, in_channels=16, channels=(32,64,64), kernel_size=3, dropout=0.1):
-        super().__init__()
-        layers = []; ch = in_channels
-        for i, out in enumerate(channels):
-            dil = 2 ** i
-            layers.append(TemporalBlock(ch, out, kernel_size, dil, dropout))
-            ch = out
-        self.tcn = nn.Sequential(*layers)
-        self.head = nn.Conv1d(ch, 1, kernel_size=1)
-    def forward(self, x):           # [B,C,T]
-        z = self.tcn(x)
-        return self.head(z).squeeze(1)   # [B,T]
+        self  """

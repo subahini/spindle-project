@@ -1,6 +1,8 @@
-# dataset.py
+
 """
-Datasets & split builder for sample-level training.
+
+this file builds the train / val / test datasets for sample-level training:
+
 - Each item: x:[C,T], y:[T] (binary vector per timepoint)
 - Sources:
     edf        -> EDF + JSON labels -> windows with CAR; real spindle labels
@@ -22,9 +24,9 @@ except Exception:
     _HAS_MNE = False
 
 
-# --------------------------
+
 #     PyTorch Dataset
-# --------------------------
+
 class WindowSampleDataset(Dataset):
     def __init__(self, X: np.ndarray, y: np.ndarray):
         assert X.ndim == 3, f"X must be [N,C,T], got {X.shape}"
@@ -39,9 +41,19 @@ class WindowSampleDataset(Dataset):
         return torch.from_numpy(self.X[idx]), torch.from_numpy(self.y[idx])
 
 
-# --------------------------
-#     JSON label helpers
-# --------------------------
+
+#     JSON labels
+# this will turn  JSON labels into a single binary vector
+"""
+  Build binary label vector [total_samples] from various JSON schemas.
+  - First tries a per-sample/per-second mask.
+  - Otherwise searches for event lists under many keys (including any that contain 'spind').
+  - Accepts events whose 'type'/'label'/'name' contains 'spind' OR events with 'start'/'end' only.
+  - Converts time units (sec/ms/samples) to seconds.
+  - Keeps only events for kept channels if JSON supplies 'channel' or 'channel_names'.
+  """
+
+
 def _load_json_labels(json_path: str) -> Any:
     if not os.path.exists(json_path):
         raise FileNotFoundError(f"Label file not found: {json_path}")
@@ -55,8 +67,8 @@ def _iter_event_lists(x: Any) -> Iterable[List[Dict[str, Any]]]:
     """
     Recursively yield lists of dict-like 'events'.
     Matches common container keys and ANY key that contains 'spind'
-    (e.g., 'detected_spindles', 'spindleEvents', ...).
-    Handles when the value is a list-of-dicts OR a dict with a list nested inside.
+    (e.g., 'detected_spindles', 'spindleEvents', ...).   detected spindel is the key
+    Handles when the value is a list-of-dicts
     """
     if isinstance(x, list) and x and isinstance(x[0], dict):
         yield x
@@ -77,7 +89,7 @@ def _iter_event_lists(x: Any) -> Iterable[List[Dict[str, Any]]]:
 
 def _try_per_sample_mask(labels_data: Any, total_samples: int, sfreq: float) -> Optional[np.ndarray]:
     """
-    Try to read a direct per-sample (or per-second) 0/1 mask from the JSON.
+    Try to read a direct 0/1 mask from the JSON.
     """
     candidate_keys = ["labels", "y", "mask", "spindle_mask", "binary_labels", "per_sample", "per_timepoint"]
     nodes = [labels_data]
@@ -177,14 +189,7 @@ def _create_labels_from_json_any_schema(
     sfreq: float,
     channel_names: List[str],
 ) -> np.ndarray:
-    """
-    Build binary label vector [total_samples] from various JSON schemas.
-    - First tries a per-sample/per-second mask.
-    - Otherwise searches for event lists under many keys (including any that contain 'spind').
-    - Accepts events whose 'type'/'label'/'name' contains 'spind' OR events with 'start'/'end' only.
-    - Converts time units (sec/ms/samples) to seconds.
-    - Keeps only events for kept channels if JSON supplies 'channel' or 'channel_names'.
-    """
+
     T_all_sec = float(total_samples) / float(sfreq)
     print(f"[labels] Top-level keys: {_top_keys(labels_data)}")
 
@@ -301,7 +306,7 @@ def _edf_to_windows_with_json_labels(
     if bandpass:
         raw.filter(bandpass[0], bandpass[1])
 
-    # Optional resample to cfg sfreq
+    # resample to cfg sfreq
     try:
         if sfreq and float(raw.info["sfreq"]) != float(sfreq):
             print(f"Resampling from {raw.info['sfreq']} Hz -> {sfreq} Hz")

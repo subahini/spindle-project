@@ -12,7 +12,7 @@ from metrics import SampleMetrics
 
 
 def _cfg(cfg: Any, path: str, default=None):
-    """Safe nested getter: _cfg(cfg, 'trainer.lr', 1e-3)."""
+    """Safe nested getter: read from config file if not set default"""
     cur = cfg
     for k in path.split("."):
         try:
@@ -33,6 +33,7 @@ def _maybe_set_wandb_mode(mode: str | None):
     elif m == "disabled":
         os.environ["WANDB_DISABLED"] = "true"
 
+# all training parameter is collected here
 
 def _build_train_config(cfg: DictConfig) -> TrainConfig:
     return TrainConfig(
@@ -51,7 +52,7 @@ def _build_train_config(cfg: DictConfig) -> TrainConfig:
         RUN_NAME=_cfg(cfg, "trainer.run_name", None),
     )
 
-
+# feed info cofig from .yaml
 @hydra.main(config_path=".", config_name="config", version_base="1.3")
 def main(cfg: DictConfig):
     _maybe_set_wandb_mode(_cfg(cfg, "logging.wandb_mode", None))
@@ -78,7 +79,10 @@ def main(cfg: DictConfig):
     train_out = trainer.fit(model=model, train_loader=train_loader, val_loader=val_loader, extra_cfg=extra_cfg)
     print("training finished:", train_out)
 
-    # 5) evaluation (pick threshold on VAL if requested)
+    # 5) evaluation (pick threshold on VAL )   this will run model on loader and stitch the predition ...
+    # precidon recalll.... all computeted and saved
+
+
     print("\n======== evaluation (test) ========")
     sm = SampleMetrics(
         sfreq=float(_cfg(cfg, "data.sfreq", 200.0)),
@@ -89,7 +93,12 @@ def main(cfg: DictConfig):
     )
     device = str(_cfg(cfg, "trainer.device", "cpu"))
 
+
+
+
     # choose threshold
+
+    #start withh^default treshold and then evel best if  want
     thr = float(_cfg(cfg, "eval.threshold", 0.5))
     if bool(_cfg(cfg, "eval.use_val_best_threshold", True)) and (val_loader is not None):
         v_probs, v_labels = sm.stitch(model, val_loader, device=device)
@@ -97,6 +106,8 @@ def main(cfg: DictConfig):
         print(f"val-chosen threshold: {thr:.4f}  val best F1={best_conf['f1']:.4f}")
 
     # evaluate on TEST once at chosen threshold
+    #for the abouve choosen thershold it print for eval
+
     eval_out = sm.evaluate(
         model=model,
         loader=test_loader,

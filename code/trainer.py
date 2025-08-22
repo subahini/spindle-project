@@ -9,12 +9,6 @@ Features
 - early stopping on val loss, grad clipping, optional W&B logging
 - quick per-epoch validation confusion (threshold from cfg.eval.threshold or 0.5)
 
-CLI examples (Hydra):
-  python main.py trainer.loss=bce
-  python main.py trainer.loss=bce_pos trainer.bce_pos.pos_weight=auto
-  python main.py trainer.loss=focal trainer.focal.alpha=0.25 trainer.focal.gamma=2
-  python main.py trainer.loss=dice trainer.dice.smooth=1.0
-  python main.py trainer.loss=hybrid trainer.hybrid.w_bce=1.0 trainer.hybrid.w_dice=0.5
 """
 
 from dataclasses import dataclass
@@ -162,7 +156,7 @@ class SpindleTrainer:
         self.device = torch.device(config.DEVICE)
         self.criterion: Optional[nn.Module] = None
         self.hydra_cfg = self._load_hydra_cfg()  # composed Hydra cfg dict if present
-
+        # it will move model to device and build 
     def fit(
             self,
             model: nn.Module,

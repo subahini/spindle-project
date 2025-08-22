@@ -15,8 +15,8 @@ data:
   num_workers: 2
   split_seed: 123
   sampler:
-    kind: weighted   # not normal but weighted
-    pos_weight: 10.0 # weight for windows that contain any positives      # try 5–20 for under 3%
+    kind: weighted   # not normal but weighted    # undersample is comment outted 
+    pos_weight: 3.0 # weight for windows that contain any positives      # try 5–20 for under 3%
 
 
   # EDF + JSON configuration
