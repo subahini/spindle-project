@@ -1,184 +1,112 @@
-""" this i s  a model file contain ...Model : CNN Architectures for EEG Spindle Detection"""
+#sample output
+"""
+this file contains all the model used in the thesis .
+- 1D models: input [B,C,T] -> logits [B,T]
+- 2D models: input [B,1,C,T] -> logits [B,T]
+"""
+
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import math
+from torch import nn
 
 
-class FocalLoss(nn.Module):
-    
 
-    def __init__(self, alpha=0.25, gamma=2.0, reduction='mean'):
+
+
+# ----- CNN2d-------------------------------------------
+
+class CNN2D_Sample(nn.Module):
+    """
+    2D CNN (expects [B,1,C,T]) → [B,T] by collapsing channel axis and keeping time.
+    """
+    def __init__(self, in_channels=1, width=32):
         super().__init__()
-        self.alpha = alpha  # Weight for positive class
-        self.gamma = gamma  # Focusing parameter
-        self.reduction = reduction
+        self.feat = nn.Sequential(
+            nn.Conv2d(in_channels, width, kernel_size=3, padding=1),
+            nn.BatchNorm2d(width), nn.ReLU(inplace=True),
+            nn.Conv2d(width, width, kernel_size=3, padding=1),
+            nn.BatchNorm2d(width), nn.ReLU(inplace=True),
+        )
+        self.pool_h_to_1 = nn.AdaptiveAvgPool2d((1, None))   # Make the "height" (C) dimension become 1, keep time (T) unchanged
+        self.proj = nn.Conv2d(width, 1, kernel_size=1)  # -> [B,1,1,T]
 
-    def forward(self, inputs, targets):
-        # Convert logits to probabilities
-        p = torch.sigmoid(inputs)
-
-        # Calculate binary cross entropy
-        ce_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction='none')
-
-        # Calculate p_t (probability of true class)
-        p_t = p * targets + (1 - p) * (1 - targets)
-
-        # Calculate focal weight: (1 - p_t)^gamma
-        focal_weight = (1 - p_t) ** self.gamma
-
-        # Calculate alpha weight
-        alpha_t = self.alpha * targets + (1 - self.alpha) * (1 - targets)
-
-        # Combine all components
-        focal_loss = alpha_t * focal_weight * ce_loss
-
-        if self.reduction == 'mean':
-            return focal_loss.mean()
-        elif self.reduction == 'sum':
-            return focal_loss.sum()
-        else:
-            return focal_loss
+    def forward(self, x):           # [B,1,C,T]
+        z = self.feat(x)            # [B,W,C,T]
+        z = self.pool_h_to_1(z)     # [B,W,1,T]
+        z = self.proj(z)            # [B,1,1,T]
+        return z.squeeze(2).squeeze(1)  # [B,T]
 
 
-class SpindleCNN(nn.Module):
 
-    def __init__(self, n_channels=16, dropout_rate=0.4):
+
+# ----- UNet1D ---------------------------------------------------
+
+class ConvBlock1D(nn.Module):
+    def __init__(self, in_ch, out_ch, k=3, p=1):
         super().__init__()
-
-
-        self.conv_block1 = nn.Sequential(
-            nn.Conv2d(1, 32, kernel_size=(3, 7), padding=(1, 3)),
-            nn.BatchNorm2d(32),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d((1, 2)),
-            nn.Dropout2d(0.1)
+        self.net = nn.Sequential(
+            nn.Conv1d(in_ch, out_ch, k, padding=p), nn.BatchNorm1d(out_ch), nn.ReLU(inplace=True),
+            nn.Conv1d(out_ch, out_ch, k, padding=p), nn.BatchNorm1d(out_ch), nn.ReLU(inplace=True),
         )
+    def forward(self, x): return self.net(x)
+
+class UNet1D_Sample(nn.Module):
+    def __init__(self, in_channels=16, base=32):
+        super().__init__()
+        #encoder
+        self.enc1 = ConvBlock1D(in_channels, base)     #[B, 32, 400]
+        self.pool1 = nn.MaxPool1d(2)  # 400/2 =32, 200
+        self.enc2 = ConvBlock1D(base, base*2)  #64 ,200
+        self.pool2 = nn.MaxPool1d(2)  #64 100
+
+        self.enc3 = ConvBlock1D(base*2, base*4)   #128 ,100
+        #decoder
+        self.up2 = nn.ConvTranspose1d(base*4, base*2, 2, stride=2)  #64 200
+        self.dec2 = ConvBlock1D(base*4, base*2) # -> B, 64, 200
+        self.up1 = nn.ConvTranspose1d(base*2, base, 2, stride=2) # -> [B, 32, 400]
+        self.dec1 = ConvBlock1D(base*2, base) # B, 32, 400
+
+        self.head = nn.Conv1d(base, 1, kernel_size=1)  # -> [B,1,400]
+
+    def forward(self, x):  # [B,C,T]
+        e1 = self.enc1(x)
+        e2 = self.enc2(self.pool1(e1))
+        e3 = self.enc3(self.pool2(e2))
+        d2 = self.up2(e3); d2 = torch.cat([d2, e2], dim=1); d2 = self.dec2(d2)
+        d1 = self.up1(d2);  d1 = torch.cat([d1, e1], dim=1); d1 = self.dec1(d1)
+        return self.head(d1).squeeze(1)  # [B,T]
 
 
-        self.conv_block2 = nn.Sequential(
-            nn.Conv2d(32, 64, kernel_size=(3, 5), padding=(1, 2)),
-            nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d((2, 2)),
-            nn.Dropout2d(0.1)
+
+# ----- TCN1D  ---------------------------------------------
+
+class Chomp1d(nn.Module):
+    def __init__(self, n): super().__init__(); self.n = n
+    def forward(self, x): return x[:, :, :-self.n].contiguous() if self.n > 0 else x
+
+class TemporalBlock(nn.Module):
+    def __init__(self, n_in, n_out, k, dil, dropout=0.1):
+        super().__init__()
+        pad = (k - 1) * dil
+        self.net = nn.Sequential(
+            nn.Conv1d(n_in, n_out, k, padding=pad, dilation=dil), Chomp1d(pad),
+            nn.ReLU(inplace=True), nn.BatchNorm1d(n_out), nn.Dropout(dropout),
+            nn.Conv1d(n_out, n_out, k, padding=pad, dilation=dil), Chomp1d(pad),
+            nn.ReLU(inplace=True), nn.BatchNorm1d(n_out), nn.Dropout(dropout),
         )
-
-        self.conv_block3 = nn.Sequential(
-            nn.Conv2d(64, 128, kernel_size=(3, 3), padding=(1, 1)),
-            nn.BatchNorm2d(128),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d((2, 2)),
-            nn.Dropout2d(0.1)
-        )
-
-        # Global average pooling - reduces overfitting
-        self.global_pool = nn.AdaptiveAvgPool2d((1, 1))
-
-        # Classifier with strong regularization
-        self.classifier = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(128, 64),
-            nn.ReLU(),
-            nn.Dropout(dropout_rate),
-            nn.Linear(64, 32),
-            nn.ReLU(),
-            nn.Dropout(dropout_rate),
-            nn.Linear(32, 1)
-        )
-
-        self._initialize_weights()
-
-    def _initialize_weights(self):
-        """Initialize weights using Xavier initialization"""
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                nn.init.xavier_uniform_(m.weight)
-                if m.bias is not None:
-                    nn.init.constant_(m.bias, 0)
-            elif isinstance(m, nn.Linear):
-                nn.init.xavier_uniform_(m.weight)
-                nn.init.constant_(m.bias, 0)
-
+        self.down = nn.Conv1d(n_in, n_out, 1) if n_in != n_out else nn.Identity()
     def forward(self, x):
-        x = self.conv_block1(x)
-        x = self.conv_block2(x)
-        x = self.conv_block3(x)
-        x = self.global_pool(x)
-        x = self.classifier(x)
-        return x
-# second Model :
-class UNet1D(nn.Module):
-    def __init__(self, in_channels=16, out_channels=1, init_features=64):  #
-        super(UNet1D, self).__init__()
+        out = self.net(x); res = self.down(x); return torch.relu(out + res)
 
-        features = init_features
-        self.encoder1 = UNet1D._block(in_channels, features, name="enc1")
-        self.pool1 = nn.MaxPool1d(kernel_size=2, stride=2)
-
-        self.encoder2 = UNet1D._block(features, features * 2, name="enc2")
-        self.pool2 = nn.MaxPool1d(kernel_size=2, stride=2)
-
-        self.encoder3 = UNet1D._block(features * 2, features * 4, name="enc3")
-        self.pool3 = nn.MaxPool1d(kernel_size=2, stride=2)
-
-        self.encoder4 = UNet1D._block(features * 4, features * 8, name="enc4")
-        self.pool4 = nn.MaxPool1d(kernel_size=2, stride=2)
-
-        self.bottleneck = UNet1D._block(features * 8, features * 16, name="bottleneck")
-
-        self.upconv4 = nn.ConvTranspose1d(features * 16, features * 8, kernel_size=2, stride=2)
-        self.decoder4 = UNet1D._block((features * 8) * 2, features * 8, name="dec4")
-
-        self.upconv3 = nn.ConvTranspose1d(features * 8, features * 4, kernel_size=2, stride=2)
-        self.decoder3 = UNet1D._block((features * 4) * 2, features * 4, name="dec3")
-
-        self.upconv2 = nn.ConvTranspose1d(features * 4, features * 2, kernel_size=2, stride=2)
-        self.decoder2 = UNet1D._block((features * 2) * 2, features * 2, name="dec2")
-
-        self.upconv1 = nn.ConvTranspose1d(features * 2, features, kernel_size=2, stride=2)
-        self.decoder1 = UNet1D._block(features * 2, features, name="dec1")
-
-        self.conv = nn.Conv1d(in_channels=features, out_channels=out_channels, kernel_size=1)
-
-    def forward(self, x):
-        #x = x.squeeze(1)                                  #                               error in size shape
-        enc1 = self.encoder1(x)      # [B, 64, T]
-        enc2 = self.encoder2(self.pool1(enc1))  # [B, 128, T/2]
-        enc3 = self.encoder3(self.pool2(enc2))  # [B, 256, T/4]
-        enc4 = self.encoder4(self.pool3(enc3))  # [B, 512, T/8]
-
-        bottleneck = self.bottleneck(self.pool4(enc4))  # [B, 1024, T/16]
-
-        dec4 = self.upconv4(bottleneck)
-        dec4 = torch.cat((dec4, enc4), dim=1)
-        dec4 = self.decoder4(dec4)
-
-        dec3 = self.upconv3(dec4)
-        dec3 = torch.cat((dec3, enc3), dim=1)
-        dec3 = self.decoder3(dec3)
-
-        dec2 = self.upconv2(dec3)
-        dec2 = torch.cat((dec2, enc2), dim=1)
-        dec2 = self.decoder2(dec2)
-
-        dec1 = self.upconv1(dec2)
-        dec1 = torch.cat((dec1, enc1), dim=1)
-        dec1 = self.decoder1(dec1)
-
-        #return self.conv(dec1) m    size error
-        x = self.conv(dec1)  # shape: [B, 1, T]
-        x = torch.mean(x, dim=2)  # global average pooling over time → shape: [B, 1]
-        return x
-
-    @staticmethod
-    def _block(in_channels, features, name):
-        return nn.Sequential(
-            nn.Conv1d(in_channels, features, kernel_size=3, padding=1),
-            nn.BatchNorm1d(features),
-            nn.ReLU(inplace=True),
-            nn.Conv1d(features, features, kernel_size=3, padding=1),
-            nn.BatchNorm1d(features),
-            nn.ReLU(inplace=True),
-        )
-
+class TCN1D_Sample(nn.Module):
+    def __init__(self, in_channels=16, channels=(32,64,64), kernel_size=3, dropout=0.1):
+        super().__init__()
+        layers = []; ch = in_channels
+        for i, out in enumerate(channels):
+            dil = 2 ** i
+            layers.append(TemporalBlock(ch, out, kernel_size, dil, dropout))
+            ch = out
+        self.tcn = nn.Sequential(*layers)
+        self.head = nn.Conv1d(ch, 1, kernel_size=1)
+    def forward(self, x):           # [B,C,T]
+        z = self.tcn(x)
+        return self.head(z).squeeze(1)   # [B,T]
