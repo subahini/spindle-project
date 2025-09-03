@@ -1,0 +1,5 @@
+- trainer.loss=focal
+- trainer.focal.alpha=0.25
+- trainer.focal.gamma=2.0
+- trainer.lr=1e-3
+- trainer.run_name=SET-B__LOSS-FOCAL_a0.25_g2.0__LR-1e-03

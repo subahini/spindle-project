@@ -1,0 +1,94 @@
+# config.py
+# Python config for sample-level spindle detection with W&B logging + manual metrics.
+
+CONFIG = {
+    "model": {
+        "unet1d": {
+            "in_channels": 4,        # will be overridden by data channels if different
+            "base_channels": 64,
+            "depth": 6,              #tried 5
+            "kernel_size": 7,
+            "dropout": 0.05,
+            "use_attention": False,
+            "final_activation": "none",
+        }
+    },
+
+    "data": {
+        "sfreq": 200.0,
+        "window_sec": 2.0,
+        "step_sec": 1.0,
+        "batch_size": 4,
+        "num_workers": 2,
+        "channels": ["C3", "C4", "F3", "F4"],
+        "filter": {"low": 5.0, "high": 30.0},
+
+        # Use EDF + JSON (first .edf in dir is used)
+        "edf": {
+            "dir": "./data/edf/",
+            "labels_json": "./data/labels/sleep_block_spindle_output_P002_1.json",
+        },
+
+        # Optional preprocessed arrays (if you have them)
+        # X.npy: [N,C,T], y.npy: [N,T]
+        "x_npy": None,  # "./data/X.npy"
+        "y_npy": None,  # "./data/y.npy"
+    },
+
+    "trainer": {
+        "device": "auto",             # "auto" | "cuda" | "cpu"
+        "epochs": 20,
+        "lr": 3e-4,
+        "weight_decay": 1e-2,
+        "optimizer": "adamw",
+        "early_stopping_patience": 10,
+        "grad_clip_norm": 1.0,
+        "amp": True,
+
+        # Loss: "bce" | "weighted_bce" | "focal" | "dice"
+        "loss": "weighted_bce",
+
+        "bce": {"label_smoothing": 0.03, "entropy_weight": 0.01},
+        "weighted_bce": {
+            "pos_weight": "auto",     # "auto" | float
+            "adaptive": True,
+            "target_pos_rate": 0.10,
+            "label_smoothing": 0.03,
+        },
+        "focal": {"alpha": 0.25, "gamma": 2.0, "label_smoothing": 0.05},
+        "dice": {"smooth": 1.0},
+
+        # Sampler: "normal" | "undersample" | "weighted"
+        "sampler": "undersample",
+    },
+
+    "eval": {
+        # Threshold selection each epoch :
+        "threshold_mode": "sweep",    # "sweep" | "fixed"
+        "fixed_threshold": 0.35,
+        "metric_for_best": "f1",
+        "n_thresholds": 101,
+    },
+
+    "logging": {
+        "use_tensorboard": False,
+        "tensorboard_dir": "./tb_logs",
+        "save_predictions": True,
+        "run_name": "unet1d_sample_manual_metrics",
+
+        "wandb": {
+            "enabled": True,
+            "project": "spindle-Deep_unet",
+            "entity": None,
+            "tags": ["unet1d", "spindles", "sample-level", "manual-metrics"],
+            "name": None,
+        },
+    },
+
+    "paths": {
+        "checkpoint_dir": "./checkpoints",
+        "results_dir": "./results",
+    },
+
+    "seed": 42,
+}

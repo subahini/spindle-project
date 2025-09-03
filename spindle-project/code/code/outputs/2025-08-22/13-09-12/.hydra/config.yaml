@@ -1,0 +1,90 @@
+model:
+  name: unet1d
+  in_channels: ${data.n_channels}
+  base: 32
+data:
+  source: edf
+  sfreq: 200.0
+  window_sec: 2.0
+  step_sec: 1.0
+  n_channels: 16
+  batch_size: 16
+  num_workers: 2
+  split_seed: 123
+  sampler:
+    kind: weighted
+    pos_weight: 3.0
+  edf:
+    dir: ./data/edf/
+    labels_json: ./data/labels/sleep_block_spindle_output_P002_1.json
+    reference: car
+    montage: standard_1020
+    bandpass:
+    - 0.3
+    - 35.0
+    notch_hz:
+    - 50
+    - 60
+    keep_channels:
+    - C3
+    - C4
+    - O1
+    - O2
+    - F3
+    - F4
+    - P3
+    - P4
+    - Fp1
+    - Fp2
+    - T3
+    - T4
+    - T5
+    - T6
+    - F7
+    - F8
+  npy:
+    x_path: ./data/X.npy
+    y_path: ./data/y.npy
+trainer:
+  device: cuda
+  epochs: 50
+  lr: 0.001
+  batch_size: ${data.batch_size}
+  weight_decay: 0.0
+  optimizer: adam
+  loss: hybrid
+  early_stopping_patience: 10
+  grad_clip_norm: 0.0
+  use_wandb: true
+  wandb_project: eeg-spindle-detection
+  model_name: ${model.name}
+  run_name: SET-A__LOSS-HYBRID_bce1_foc0.5_auto__LR-1e-03
+  bce_pos:
+    pos_weight: auto
+  focal:
+    alpha: 0.25
+    gamma: 2.0
+  dice:
+    smooth: 1.0
+  hybrid:
+    w_bce: 1.0
+    w_focal: 0.5
+    w_dice: 0.0
+    pos_weight: auto
+    focal:
+      alpha: 0.25
+      gamma: 2.0
+    dice:
+      smooth: 1.0
+eval:
+  threshold: 0.2
+  sweep_threshold: true
+  log_curves: true
+  use_val_best_threshold: true
+logging:
+  use_wandb: ${trainer.use_wandb}
+  wandb_project: ${trainer.wandb_project}
+  run_name: ${trainer.run_name}
+  wandb_mode: null
+paths:
+  save_dir: ./_artifacts

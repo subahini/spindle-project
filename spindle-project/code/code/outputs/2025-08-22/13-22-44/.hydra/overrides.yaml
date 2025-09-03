@@ -1,0 +1,4 @@
+- trainer.loss=bce_pos
+- trainer.bce_pos.pos_weight=auto
+- trainer.lr=1e-3
+- trainer.run_name=SET-B__LOSS-BCEpos-AUTO__LR-1e-03

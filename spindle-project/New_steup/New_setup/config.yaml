@@ -1,0 +1,130 @@
+# Enhanced Configuration for UNet1D Spindle Detection
+# ===================================================
+
+model:
+  name: unet1d
+  unet1d:
+    base: 64              # Base number of channels (try 80/96 if VRAM allows)
+    depth: 6              # Network depth (4-10)
+    kernel_size: 7        # Convolution kernel size (5, 7, 9)
+    dropout: 0.05         # Dropout rate
+    attention: false      # Enable attention mechanism at bottleneck
+
+data:
+  sfreq: 200.0                    # Target sampling frequency
+  window_sec: 2.0                 # Window length in seconds
+  step_sec: 1.0                   # Step size for sliding window
+  batch_size: 4                   # Batch size
+  num_workers: 2                  # DataLoader workers
+  max_memory_gb: 16.0            # Memory limit for dataset
+
+  # Configurable channels (modify based on your EEG setup)
+  channels: ['C3', 'C4', 'F3', 'F4']
+
+  # Configurable filtering
+  filter:
+    low: 5.0                     # High-pass filter (Hz)
+    high: 30.0                   # Low-pass filter (Hz)
+
+  edf:
+    dir: ./data/edf/
+    labels_json: ./data/labels/sleep_block_spindle_output_P002_1.json
+
+trainer:
+  device: auto                    # auto | cuda | cpu
+  epochs: 20
+  lr: 0.0003
+  weight_decay: 0.01
+  optimizer: adamw
+  early_stopping_patience: 10
+  grad_clip_norm: 1.0
+  amp: true                      # Mixed precision training
+
+  # Loss function configuration (uses your external losses.py)
+  loss: bce_pos                  # bce | bce_pos | focal | dice | hybrid
+
+  # BCE with positive weighting
+  bce_pos:
+    pos_weight: auto             # auto | float value
+
+  # Focal loss parameters
+  focal:
+    alpha: 0.25                  # Weight for positive class
+    gamma: 2.0                   # Focusing parameter
+
+  # Dice loss parameters
+  dice:
+    smooth: 1.0                  # Smoothing factor
+
+  # Hybrid loss (combination of losses)
+  hybrid:
+    w_bce: 0.7                   # BCE weight
+    w_focal: 0.0                 # Focal weight
+    w_dice: 0.3                  # Dice weight
+    pos_weight: auto             # Positive weight for BCE component
+    focal:
+      alpha: 0.25
+      gamma: 2.0
+    dice:
+      smooth: 1.0
+
+  # Sampling strategy for imbalanced data
+  sampler: weighted              # normal | undersample | weighted
+
+  # Ensemble training (experimental)
+  ensemble:
+    enabled: false
+    n_models: 5
+    voting: soft                 # soft | hard
+
+# Cross-validation configuration
+cross_validation:
+  enabled: false                 # Enable cross-validation
+  folds: 5                      # Number of CV folds
+  stratify: true                # Stratify by spindle presence
+
+# Evaluation settings
+eval:
+  sweep_threshold: true
+  metric_for_best: f1           # f1 | precision | recall | accuracy
+  n_thresholds: 101             # Number of thresholds to test
+
+# Enhanced logging
+logging:
+  log_level: INFO
+  save_predictions: false       # Save detailed predictions
+  plot_sample_windows: 3        # Number of sample windows to plot (0 to disable)
+
+  wandb:
+    enabled: true
+    project: spindle-Deep_unet-enhanced
+    entity: null                # Your W&B entity/team
+    tags: ["unet1d", "spindles", "enhanced"]
+    save_code: true
+
+  # Formatted run name with config interpolation
+  run_name: "loss={trainer[loss]}_lr={trainer[lr]}_depth={model[unet1d][depth]}_sampler={trainer[sampler]}"
+
+# Hyperparameter search (future feature)
+hyperparameter_search:
+  enabled: false
+  method: random                # random | grid | bayesian
+  trials: 50
+  search_space:
+    trainer.lr: [0.0001, 0.001]
+    model.unet1d.base: [32, 64, 128]
+    model.unet1d.depth: [4, 6, 8, 10]
+    trainer.loss: ["bce", "focal", "dice", "hybrid"]
+
+paths:
+  checkpoint_dir: ./checkpoints
+  results_dir: ./results        # For saving detailed results
+
+# Reproducibility
+seed: 42
+
+# Advanced features (experimental)
+advanced:
+  temporal_smoothing: false     # Post-processing temporal smoothing
+  ensemble_inference: false    # Use ensemble for inference
+  real_time_mode: false        # Enable real-time inference optimizations
