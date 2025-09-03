@@ -1,0 +1,50 @@
+model:
+  name: unet1d
+  in_channels: 16
+  base: 32
+data:
+  sfreq: 200.0
+  window_sec: 2.0
+  step_sec: 1.0
+  batch_size: 16
+trainer:
+  DEVICE: ${oc.env:DEVICE,cuda}
+  EPOCHS: 30
+  LR: 0.001
+  BATCH_SIZE: ${data.batch_size}
+  WEIGHT_DECAY: 0.0
+  OPTIMIZER: adam
+  LOSS: bce
+  EARLY_STOPPING_PATIENCE: 10
+  GRAD_CLIP_NORM: 0.0
+  USE_WANDB: ${logging.use_wandb}
+  WANDB_PROJECT: ${logging.wandb_project}
+  MODEL_NAME: UNet1D_Sample
+  RUN_NAME: null
+  bce_pos:
+    pos_weight: auto
+  focal:
+    alpha: 0.25
+    gamma: 2.0
+  dice:
+    smooth: 1.0
+  hybrid:
+    w_bce: 1.0
+    w_focal: 0.0
+    w_dice: 0.0
+    pos_weight: auto
+    focal:
+      alpha: 0.25
+      gamma: 2.0
+    dice:
+      smooth: 1.0
+eval:
+  threshold: 0.5
+  sweep_threshold: false
+  log_curves: true
+logging:
+  use_wandb: true
+  wandb_project: eeg-spindle-detection
+  run_name: null
+paths:
+  save_dir: ./_artifacts
