@@ -50,7 +50,7 @@ class ConvBlock1D(nn.Module):
     def forward(self, x): return self.net(x)
 
 class UNet1D_Sample(nn.Module):
-    def __init__(self, in_channels=16, base=32):
+    def __init__(self, in_channels=1, base=32):
         super().__init__()
         #encoder
         self.enc1 = ConvBlock1D(in_channels, base)     #[B, 32, 400]

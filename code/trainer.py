@@ -156,7 +156,7 @@ class SpindleTrainer:
         self.device = torch.device(config.DEVICE)
         self.criterion: Optional[nn.Module] = None
         self.hydra_cfg = self._load_hydra_cfg()  # composed Hydra cfg dict if present
-        # it will move model to device and build 
+        # it will move model to device and build
     def fit(
             self,
             model: nn.Module,
@@ -224,23 +224,22 @@ class SpindleTrainer:
                         val_losses.append(vloss)
                 val_loss = float(np.mean(val_losses)) if val_losses else float("nan")
 
-                # compute PR-AUC/ROC-AUC for *selection/logging*
+                # --- NEW: use the already-implemented high-level API ---
                 pr_auc = float("nan");
                 roc_auc = float("nan")
                 conf = {"tp": 0, "fp": 0, "tn": 0, "fn": 0, "precision": 0.0, "recall": 0.0, "f1": 0.0}
-                if _HAS_SM:
-                    try:
-                        sm = SampleMetrics()
-                        # PR/ROC
-                        aucs = sm.epoch_roc_pr(model, val_loader, device=str(self.device))
-                        pr_auc = float(aucs.get("pr_auc", float("nan")))
-                        roc_auc = float(aucs.get("roc_auc", float("nan")))
-                        # quick confusion at display threshold
-                        conf = sm.epoch_confusion(model, val_loader, device=str(self.device), threshold=threshold)
-                    except Exception:
-                        pass
+                try:
+                    from metrics import SampleMetrics
+                    sm = SampleMetrics()  # uses defaults; fine for per-epoch logging
+                    ev = sm.evaluate(model, val_loader, device=str(self.device),
+                                     threshold=threshold, sweep_threshold=False, log_curves=False)
+                    pr_auc = float(ev.get("pr_auc", float("nan")))
+                    roc_auc = float(ev.get("roc_auc", float("nan")))
+                    conf = ev.get("confusion", conf)
+                except Exception:
+                    pass
 
-                # model selection by PR-AUC
+                # model selection by PR-AUC (unchanged)
                 improved = (pr_auc > best_score + 1e-6)
                 if improved:
                     best_score = pr_auc
@@ -248,7 +247,6 @@ class SpindleTrainer:
                     patience = 0
                 else:
                     patience += 1
-
                 # log/print
                 if run is not None:
                     wandb.log({

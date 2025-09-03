@@ -192,7 +192,17 @@ class SampleMetrics:
                 probs.append(p.detach().cpu().numpy())
                 labels.append(yb.detach().cpu().numpy())
         return np.concatenate(probs, 0), np.concatenate(labels, 0)
+    def epoch_roc_pr(self, model: nn.Module, loader, device="cpu"):
+        """Compute ROC/PR AUC over the whole validation loader."""
+        probs, labels = self.stitch(model, loader, device=device)
+        return _rocpr(labels, probs)  # returns keys like {'roc_auc': ..., 'pr_auc': ...}
 
+    def epoch_confusion(self, model: nn.Module, loader, device="cpu", threshold: float = 0.5):
+        """Confusion at a given threshold over the whole validation loader."""
+        probs, labels = self.stitch(model, loader, device=device)
+        return _confusion(labels, probs, threshold=float(threshold))
+
+    # best thershold based on f1   
     def best_threshold_from_arrays(self, labels: np.ndarray, probs: np.ndarray, num: int = 101):
         y = labels.reshape(-1)
         p = probs.reshape(-1)

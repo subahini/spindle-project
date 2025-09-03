@@ -10,7 +10,5 @@ paths:
 labels:
   key: main/SeLECTS_Data_SpindleDetection/SeLECTS_Data_SpindleDetection/Epilog_Spindles/sleep_block_spindle_output_P002_1.json
   local: data/labels/sleep_block_spindle_output_P002_1.json
-filter:
-  l_freq: 1.0
-  h_freq: 30.0
+
 
