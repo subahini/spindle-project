@@ -1,0 +1,81 @@
+project:
+  name: crnn_spindles
+  seed: 42
+  device: cuda
+  entity: "subahininadarajh-basel-university"
+
+# UNet-style data block
+data:
+  sfreq: 200.0
+  window_sec: 2.0
+  step_sec: 1.0
+  batch_size: 16
+  num_workers: 4
+  channels: ["C3", "C4", "O1", "O2", "Fp1", "Fp2", "F7", "F3", "Fz", "F4", "F8",
+             "T3", "T4", "T5", "T6", "P3", "Pz", "P4", "Oz"]
+  filter:
+    low: 5.0
+    high: 30.0
+  edf:
+    dir: "../data/edf"
+    labels_json: "../data/labels/sleep_block_spindle_output_P002_1.json"
+  x_npy: null
+  y_npy: null
+
+paths:
+  out_dir: "./checkpoints"
+
+signal:
+  normalize: zscore
+  reference: car
+  sfreq: 200
+
+spectrogram:
+  n_fft: 128
+  hop_length: 20
+  win_length: 128
+  center: true
+  power: 2.0
+
+model:
+  in_channels: 19
+  base_ch: 32
+  fpn_ch: 128
+  rnn_hidden: 128
+  rnn_layers: 2
+  bidirectional: true
+  use_se: true
+  bias_init_prior: 0.02
+  upsample_mode: linear
+
+trainer:
+  epochs: 70
+  batch_size: 16
+  lr: 0.0003
+  weight_decay: 0.01
+  amp: true
+  grad_clip: 1.0
+  num_workers: 4
+  sampler: undersample
+
+loss:
+  name: weighted_bce
+  weighted_bce:
+    pos_weight: auto
+    adaptive: true
+    target_pos_rate: 0.10
+    label_smoothing: 0.03
+
+eval:
+  n_thresholds: 101
+  metric_for_best: f1
+
+logging:
+  wandb:
+    enabled: true
+    project: "CRNN"
+    entity: "subahininadarajh-basel-university"
+    tags: ["CRNN"]
+
+log:
+  every_steps: 50

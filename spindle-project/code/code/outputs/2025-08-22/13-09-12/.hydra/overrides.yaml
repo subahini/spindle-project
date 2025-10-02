@@ -1,9 +1,0 @@
-- trainer.loss=hybrid
-- trainer.hybrid.w_bce=1.0
-- trainer.hybrid.w_focal=0.5
-- trainer.hybrid.w_dice=0.0
-- trainer.hybrid.pos_weight=auto
-- trainer.hybrid.focal.alpha=0.25
-- trainer.hybrid.focal.gamma=2.0
-- trainer.lr=1e-3
-- trainer.run_name=SET-A__LOSS-HYBRID_bce1_foc0.5_auto__LR-1e-03

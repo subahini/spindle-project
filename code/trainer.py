@@ -202,6 +202,41 @@ class SpindleTrainer:
 
                 loss = self.criterion(logits, yb)
                 loss.backward()
+                #   trying to see how my gradient
+                scaler = torch.amp.GradScaler(
+                    device_type=device.type,
+                    enabled=(device.type == "cuda") and bool(cfg["trainer"]["amp"])
+                )
+
+                scaler.scale(loss).backward()
+
+                scaler.unscale_(optimizer)
+
+                # ---- gradient inspection ----
+                total_norm = 0.0
+                for name, p in model.named_parameters():
+                    if p.grad is not None:
+                        param_norm = p.grad.detach().data.norm(2).item()
+                        total_norm += param_norm ** 2
+                        print(f"{name:30s} | grad_norm={param_norm:.3e}")
+                total_norm = total_norm ** 0.5
+                print(f"--> Total grad L2 norm: {total_norm:.3e}")
+                # -----------------------------
+
+                # Clip (if enabled)
+                if cfg["trainer"]["grad_clip_norm"]:
+                    nn.utils.clip_grad_norm_(model.parameters(), float(cfg["trainer"]["grad_clip_norm"]))
+
+                # Step optimizer
+                scaler.step(optimizer)
+                scaler.update()
+
+
+
+
+
+
+
                 if self.config.GRAD_CLIP_NORM and self.config.GRAD_CLIP_NORM > 0:
                     nn.utils.clip_grad_norm_(model.parameters(), self.config.GRAD_CLIP_NORM)
                 optimizer.step()

@@ -1,9 +1,0 @@
-- trainer.loss=focal
-- trainer.focal.alpha=0.25
-- trainer.focal.gamma=2.5
-- trainer.lr=3e-4
-- trainer.optimizer=adamw
-- trainer.weight_decay=1e-2
-- data.sampler.kind=weighted
-- data.sampler.pos_weight=3
-- trainer.run_name=A_focal_adamw_lr3e-4_pw3
