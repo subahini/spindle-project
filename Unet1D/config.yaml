@@ -1,0 +1,79 @@
+
+
+model:
+  unet1d:
+    in_channels: 19        # will be checked against data channels
+    base_channels: 70    #it was 64
+    depth: 7
+    kernel_size: 7
+    dropout: 0.1  #0.05
+    use_attention: false  # lightweight, can keep false
+    final_activation: "none"
+
+data:
+  sfreq: 200.0
+  window_sec: 2.0
+  step_sec: 1.0
+  batch_size: 4
+  num_workers: 2
+  channels:  ["C3", "C4", "O1", "O2", "Fp1", "Fp2", "F7", "F3", "Fz", "F4", "F8",
+             "T3", "T4", "T5", "T6", "P3", "Pz", "P4", "Oz"]
+  filter:
+    low: 5.0
+    high: 30.0
+  edf:
+    dir: "./data/edf"                 # folder with *.edf
+    labels_json: "./data/labels/sleep_block_spindle_output_P002_1.json"
+
+  x_npy: null
+  y_npy: null
+
+trainer:
+  device: "auto"            # "auto" | "cuda" | "cpu"
+  epochs: 70
+  lr: 0.00005
+  weight_decay: 0.01
+  optimizer: "adamw"
+  early_stopping_patience: 0   # for observation i set it to 0 ....
+  grad_clip_norm: 1.0
+  amp: true
+  # One of: "bce", "weighted_bce", "focal", "dice"
+  loss: "weighted_bce"
+  bce:
+    label_smoothing: 0.03
+    entropy_weight: 0.01
+  weighted_bce:
+    pos_weight: "auto"       # "auto" | float
+    adaptive: true
+    target_pos_rate: 0.10
+    label_smoothing: 0.03
+  focal:
+    alpha: 0.25
+    gamma: 2.0
+    label_smoothing: 0.05
+  dice:
+    smooth: 1.0
+  # Sampling: "normal" | "undersample" | "weighted"
+  sampler: "undersample"
+
+eval:
+  sweep_threshold: true
+  metric_for_best: "f1"    # "f1" | "precision" | "recall" | "accuracy"
+  n_thresholds: 101
+
+logging:
+  run_name: "unet1d"
+  save_predictions: true
+  wandb:
+    enabled: true                           # Enable W&B logging
+    project: "Unet_5e5_70_7_7"           # Your W&B project name
+    entity:  "subahininadarajh-basel-university"                          # Your W&B entity/username (optional)
+    api_key: null
+    name: null                             # Run name (will auto-generate if null)
+    tags: [ "unet1d"]  # Tags for organization
+
+paths:
+  checkpoint_dir: "./checkpoints"
+  results_dir: "./results"
+
+seed: 42
