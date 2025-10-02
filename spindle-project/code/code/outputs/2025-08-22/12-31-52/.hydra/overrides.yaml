@@ -1,3 +1,0 @@
-- trainer.loss=bce
-- trainer.lr=1e-3
-- trainer.run_name=SET-A__LOSS-BCE__LR-1e-03
