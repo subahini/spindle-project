@@ -1,6 +1,6 @@
 model:
   name: stgcn_spindle
-  C: 16
+  C: 19
   T: 400
   F0: 16
   block_channels: [32, 48, 64]
@@ -11,7 +11,8 @@ model:
 graph:
   prior: distance        # identity | distance
   coords_csv: ./metadata/coords_10-20.csv
-  channel_names: [F3, F4, C3, C4, O1, O2, F7, F8, T3, T4, P3, P4, Fz, Cz, Pz, Oz]
+  channel_names: [ "C3", "C4", "O1", "O2", "Fp1", "Fp2", "F7", "F3", "Fz", "F4", "F8",
+    "T3", "T4", "T5", "T6", "P3", "Pz", "P4", "Oz" ]
   normalize: true
   sigma: 0.15
   lambda_init: 0.0
@@ -55,10 +56,11 @@ aug:
   time_mask_max_ms: 100
 
 data:
-  windows_npy: ./data/windows_2s_1sstride
+  windows_npy: ./data/windows.npy
   labels_framewise: ./data/labels_framewise.npy
-  labels_per_channel: ./data/labels_per_channel.npy   # i am not sure if my json have per channel interval
+  labels_per_channel: ./data/labels_per_channel.npy
   sample_rate: 200
+  val_fraction: 0.2
 
 postproc:
   hysteresis:
@@ -73,3 +75,8 @@ logging:
     run_name: ${now:%Y%m%d-%H%M%S}
   save_every_epochs: 1
   plot_traces: true
+  # NEW: Metrics logging settings
+  eval_metrics_every_epochs: 5      # Compute full metrics every N epochs
+  eval_train_metrics: false         # Also evaluate metrics on train set (slower)
+  detection_threshold: 0.5          # Probability threshold for binary classification
+  log_graphs: true                  # Log adjacency matrix heatmaps
