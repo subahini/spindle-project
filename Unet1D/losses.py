@@ -1,8 +1,4 @@
-"""
-losses.py
-Imbalance-aware loss functions for sample-level spindle detection.
-All losses expect LOGITS as input (no sigmoid before the loss).
-"""
+# all losses.py are same for all model
 
 from typing import Dict, Any
 import torch
