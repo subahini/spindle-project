@@ -1,7 +1,3 @@
-"""
-metrics_logging.py
-Compute and log classification metrics for spindle detection
-"""
 
 from typing import Dict, Optional, Tuple
 import numpy as np
@@ -26,18 +22,8 @@ except Exception:
 @torch.no_grad()
 def collect_predictions(model, loader, device, threshold: float = 0.5) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Collect all predictions and targets from a dataloader.
+     this will Collect all predictions and targets from a dataloader.
 
-    Args:
-        model: The trained model
-        loader: DataLoader (assumes collate_fn returns list of dicts)
-        device: torch device
-        threshold: probability threshold for binary predictions
-
-    Returns:
-        y_true: (N*T,) binary labels
-        y_probs: (N*T,) predicted probabilities
-        y_pred: (N*T,) binary predictions
     """
     model.eval()
     all_probs = []
@@ -69,15 +55,9 @@ def collect_predictions(model, loader, device, threshold: float = 0.5) -> Tuple[
 
 def compute_metrics(y_true: np.ndarray, y_probs: np.ndarray, y_pred: np.ndarray) -> Dict[str, float]:
     """
-    Compute classification metrics.
+     this Compute classification metrics.
 
-    Args:
-        y_true: ground truth binary labels
-        y_probs: predicted probabilities
-        y_pred: binary predictions
-
-    Returns:
-        Dictionary of metric values
+    A
     """
     # Handle edge case: all one class
     if len(np.unique(y_true)) < 2:
@@ -118,13 +98,6 @@ def plot_confusion_matrix(y_true: np.ndarray, y_pred: np.ndarray, normalize: boo
     """
     Create confusion matrix plot.
 
-    Args:
-        y_true: ground truth
-        y_pred: predictions
-        normalize: whether to normalize by row (true class)
-
-    Returns:
-        matplotlib Figure
     """
     cm = confusion_matrix(y_true, y_pred)
 
@@ -165,13 +138,7 @@ def plot_roc_curve(y_true: np.ndarray, y_probs: np.ndarray, roc_auc: float) -> p
     """
     Create ROC curve plot.
 
-    Args:
-        y_true: ground truth
-        y_probs: predicted probabilities
-        roc_auc: pre-computed ROC-AUC score
 
-    Returns:
-        matplotlib Figure
     """
     fpr, tpr, _ = roc_curve(y_true, y_probs)
 
@@ -193,13 +160,7 @@ def plot_pr_curve(y_true: np.ndarray, y_probs: np.ndarray, pr_auc: float) -> plt
     """
     Create Precision-Recall curve plot.
 
-    Args:
-        y_true: ground truth
-        y_probs: predicted probabilities
-        pr_auc: pre-computed PR-AUC score
-
-    Returns:
-        matplotlib Figure
+    A
     """
     precision, recall, _ = precision_recall_curve(y_true, y_probs)
 
@@ -230,12 +191,7 @@ def log_metrics_to_wandb(
     """
     Compute and log all metrics to W&B.
 
-    Args:
-        y_true: ground truth
-        y_probs: predicted probabilities
-        y_pred: binary predictions
-        step: training step/epoch
-        prefix: metric prefix (e.g., 'val', 'test')
+
     """
     if wandb is None or not wandb.run:
         print("[WARN] W&B not initialized. Skipping metric logging.")
@@ -289,13 +245,7 @@ def evaluate_and_log(
     """
     Complete evaluation: collect predictions, compute metrics, and log to W&B.
 
-    Args:
-        model: trained model
-        loader: DataLoader
-        device: torch device
-        epoch: current epoch (for W&B step)
-        prefix: metric prefix
-        threshold: probability threshold for binary classification
+
     """
     print(f"\nEvaluating on {prefix} set...")
 
@@ -313,7 +263,6 @@ def evaluate_and_log(model, loader, device, threshold: float = 0.5, prefix: str 
     - Logs BOTH confusion matrices: counts and normalized
     - Logs ROC and PR curves (if both classes present)
     - Logs raw confusion matrix as a W&B table
-    Assumes you've defined epoch axis: wandb.define_metric(f"{prefix}/*", step_metric="epoch")
     """
     # 1) Collect predictions
     y_true, y_probs, y_pred = collect_predictions(model, loader, device, threshold)

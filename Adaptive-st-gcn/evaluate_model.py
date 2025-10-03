@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
 """
-Standalone evaluation script for trained ST-GCN models
-
-Usage:
   python evaluate_model.py --checkpoint checkpoints/stgcn_best.pt --threshold 0.5
 """
 

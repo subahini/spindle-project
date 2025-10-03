@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Enhanced trainer for Adaptive ST-GCN with comprehensive metrics logging
+trainer for Adaptive ST-GCN
 """
 
 from __future__ import annotations

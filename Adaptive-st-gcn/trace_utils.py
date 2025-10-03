@@ -16,7 +16,7 @@ def extract_onsets_from_logits_per_channel(
     """Return onset indices per channel for each batch.
     Args:
       logits_per_ch: (B, C, T)
-      thr: probability threshold on sigmoid(logits)
+      thr: probability threshold on sigmoid(logits)  --------------
       min_consec: require this many consecutive frames above thr to accept onset
     Returns:
       onsets: LongTensor (B, C) with onset index in [0, T-1] or -1 if none.
@@ -50,10 +50,7 @@ def extract_onsets_from_logits_per_channel(
 @torch.no_grad()
 def propagation_order_from_onsets(onsets: torch.Tensor) -> torch.Tensor:
     """Sort channels by onset; ties keep original order; -1 go to end.
-    Args:
-      onsets: (B, C) LongTensor of indices or -1
-    Returns:
-      order: (B, C) LongTensor of channel indices sorted by onset
+
     """
     B, C = onsets.shape
     large = onsets[onsets >= 0].max().item() + 10_000 if (onsets >= 0).any() else 10_000

@@ -1,41 +1,5 @@
 #!/usr/bin/env python3
-"""
-Builder for ST-GCN data (TAILORED to your JSON screenshots)
------------------------------------------------------------
-Reads RAW EEG (EDF/BDF/FIF) + your JSON format and writes:
-  - data/windows.npy              (N, C, T)  float32
-  - data/labels_framewise.npy    (N, T)     float32 (0/1)
-  - data/labels_per_channel.npy  (N, C, T)  float32 (0/1)  [if channels present]
 
-Your JSON format (supported):
-  {
-    "channel_names": ["F3","F4","C3","C4",...],   # optional at top level
-    "detected_spindles": [
-      { "start": 1669.572, "end": 1670.604, "channels": ["C4-REF"] },
-      { "start": 1676.488, "end": 1677.004, "channels": [3] },        # 3 -> channel_names[3]
-      { "start": 1691.312, "end": 1691.960 }                           # no per-channel info
-    ],
-    ... other fields ignored ...
-  }
-
-The 'channels' field per spindle may also be a dict, e.g.:
-  { "channels": { "channel_names": ["C3","C4"], "0": 1, "1": 0 } }  # truthy keys -> included
-or { "channels": { "C4-REF": 1 } }
-
-Usage example
--------------
-python builder.py \
-  --raw_dir ./raw \
-  --labels ./labels \
-  --channels F3,F4,C3,C4,O1,O2,F7,F8,T3,T4,P3,P4,Fz,Cz,Pz,Oz \
-  --sfreq 200 --win 2.0 --stride 1.0 --band 10 16 \
-  --out_dir ./data
-
-Dependencies
-------------
-  pip install mne pyedflib scipy numpy
-
-"""
 from __future__ import annotations
 import argparse
 import json
@@ -74,7 +38,7 @@ def _canon(name: str) -> str:
 
 
 def parse_label_json_viewer(j: Dict[str, Any]) -> Tuple[List[Tuple[float,float]], Dict[str, List[Tuple[float,float]]]]:
-    """Parse your viewer-like JSON with detected_spindles.
+    """
     Returns:
       global_iv: list of (start,end) seconds
       per_ch: dict: CANONICAL_CHANNEL_NAME -> list of (start,end)
@@ -167,7 +131,7 @@ def load_raw_signals(path: Path, pick_channels: List[str], target_sfreq: float) 
         data = raw.get_data()
         return data.astype(np.float32), [ch.strip() for ch in picks], float(raw.info['sfreq'])
 
-    if pyedflib is not None and path.suffix.lower() == '.edf':
+    if pyedflib is not None and path.suffix.lower() == '.edf':  # some error
         f = pyedflib.EdfReader(path.as_posix())
         names = [f.getLabel(i).strip() for i in range(f.signals_in_file)]
         idxs = []
