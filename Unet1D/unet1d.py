@@ -450,6 +450,16 @@ def main():
             thr = float(ev.get("fixed_threshold", 0.5))
             preds = (probs >= thr).astype(np.int64)
             m = basic_metrics(trues, preds)
+
+            #loggging confusion matricssss
+            if use_wandb:
+                wandb.log({
+                    "conf_mat": wandb.plot.confusion_matrix(
+                        preds=preds,
+                        y_true=trues,
+                        class_names=["Non-Spindle", "Spindle"]
+                    )
+                }, step=epoch)
         else:
             # sweep for best metric
             n_th = int(ev.get("n_thresholds", 101))

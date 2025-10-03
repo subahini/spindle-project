@@ -1,4 +1,4 @@
-# Full CRNN pipeline comparable to UNet: sample-level predictions
+
 import os, math, json, argparse, time, random, csv
 from dataclasses import dataclass
 from typing import Tuple, List, Dict, Any, Optional
@@ -196,7 +196,7 @@ class CRNN2D_BiGRU(nn.Module):
 
 # ----------------- Dataset (returns TUPLES) -----------------
 class EEGDataset(Dataset):
-    """Dataset that returns (x, y) tuples for compatibility with losses.py"""
+    """ this Dataset  returns (x, y) tuples ------- losses.py"""
 
     def __init__(self, X, y, normalize="zscore", reference="car"):
         self.X = X.astype(np.float32)

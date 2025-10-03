@@ -1,46 +1,51 @@
 #!/usr/bin/env python3
 """
-Build ST-GCN training arrays from RAW EEG + JSON labels
-------------------------------------------------------
-This script reads raw EEG files (EDF/BDF/FIF) and JSON spindle labels, then creates:
-  - windows.npy           -> float32 (N, C, T)           EEG windows
-  - labels_framewise.npy  -> float32 (N, T)               0/1 per time sample
-  - labels_per_channel.npy-> float32 (N, C, T) (optional) 0/1 per channel & time
+Builder for ST-GCN data (TAILORED to your JSON screenshots)
+-----------------------------------------------------------
+Reads RAW EEG (EDF/BDF/FIF) + your JSON format and writes:
+  - data/windows.npy              (N, C, T)  float32
+  - data/labels_framewise.npy    (N, T)     float32 (0/1)
+  - data/labels_per_channel.npy  (N, C, T)  float32 (0/1)  [if channels present]
 
-JSON formats supported (auto-detected):
-  1) Global intervals:   {"spindles": [{"start": 12.3, "end": 13.8}, ...]}
-  2) Per-channel dict:   {"per_channel": {"C3": [{"start": ...,"end": ...}], "C4": [...]}}
-  3) Flat list:          [{"start": s, "end": e}]  (treated as global)
+Your JSON format (supported):
+  {
+    "channel_names": ["F3","F4","C3","C4",...],   # optional at top level
+    "detected_spindles": [
+      { "start": 1669.572, "end": 1670.604, "channels": ["C4-REF"] },
+      { "start": 1676.488, "end": 1677.004, "channels": [3] },        # 3 -> channel_names[3]
+      { "start": 1691.312, "end": 1691.960 }                           # no per-channel info
+    ],
+    ... other fields ignored ...
+  }
 
-Usage examples
---------------
-# Build from a folder of EDFs where each EDF has a matching JSON next to it
-python build_data.py \
+The 'channels' field per spindle may also be a dict, e.g.:
+  { "channels": { "channel_names": ["C3","C4"], "0": 1, "1": 0 } }  # truthy keys -> included
+or { "channels": { "C4-REF": 1 } }
+
+Usage example
+-------------
+python builder.py \
   --raw_dir ./raw \
   --labels ./labels \
   --channels F3,F4,C3,C4,O1,O2,F7,F8,T3,T4,P3,P4,Fz,Cz,Pz,Oz \
   --sfreq 200 --win 2.0 --stride 1.0 --band 10 16 \
   --out_dir ./data
 
-# If you have one EDF + one JSON
-python build_data.py --raw ./raw/sub01.edf --labels ./labels/sub01.json --channels C3,C4,Cz --out_dir ./data
+Dependencies
+------------
+  pip install mne pyedflib scipy numpy
 
-Notes
------
-- Requires: mne (preferred) or pyedflib (fallback for EDF). Install with: pip install mne pyedflib
-- You can skip bandpass by omitting --band.
-- If per-channel labels are absent, only framewise labels will be saved.
 """
 from __future__ import annotations
 import argparse
 import json
 import os
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Any
 
 import numpy as np
 
-# Optional deps
+# Optional: prefer MNE, fallback to pyedflib for EDF
 try:
     import mne  # type: ignore
 except Exception:
@@ -50,51 +55,89 @@ try:
 except Exception:
     pyedflib = None
 
-
 # -----------------------------
-# JSON parsing
+# JSON parsing for your schema
 # -----------------------------
 
-def _load_json(path: Path) -> Dict:
+def _load_json(path: Path) -> Dict[str, Any]:
     with open(path, 'r') as f:
         return json.load(f)
 
 
-def parse_label_json(j: Dict) -> Tuple[List[Tuple[float, float]], Dict[str, List[Tuple[float, float]]]]:
-    """Return (global_intervals, per_channel_intervals).
-    Each interval is (start_sec, end_sec).
+def _canon(name: str) -> str:
+    n = name.strip().lower()
+    # strip common refs/suffixes: -ref, _ref, -avg, etc.
+    for sep in ('-', '_'):
+        if sep in n:
+            n = n.split(sep)[0]
+    return n.upper()
+
+
+def parse_label_json_viewer(j: Dict[str, Any]) -> Tuple[List[Tuple[float,float]], Dict[str, List[Tuple[float,float]]]]:
+    """Parse your viewer-like JSON with detected_spindles.
+    Returns:
+      global_iv: list of (start,end) seconds
+      per_ch: dict: CANONICAL_CHANNEL_NAME -> list of (start,end)
     """
-    global_iv = []  # type: List[Tuple[float,float]]
-    per_ch = {}     # type: Dict[str, List[Tuple[float,float]]]
+    global_iv: List[Tuple[float,float]] = []
+    per_ch: Dict[str, List[Tuple[float,float]]] = {}
 
-    if isinstance(j, list):
-        # flat list of intervals
-        for it in j:
-            s = float(it.get('start', it.get('onset', 0.0)))
-            e = float(it.get('end', it.get('offset', s)))
-            global_iv.append((s, e))
-        return global_iv, per_ch
+    # optional top-level channel names for index mapping
+    top_names = None
+    if isinstance(j.get('channel_names'), list):
+        top_names = [str(x) for x in j['channel_names']]
 
-    if 'spindles' in j and isinstance(j['spindles'], list):
-        for it in j['spindles']:
-            s = float(it.get('start', it.get('onset', 0.0)))
-            e = float(it.get('end', it.get('offset', s)))
-            global_iv.append((s, e))
+    ds = j.get('detected_spindles')
+    if not isinstance(ds, list):
+        raise ValueError("JSON missing 'detected_spindles' list")
 
-    if 'per_channel' in j and isinstance(j['per_channel'], dict):
-        for ch, lst in j['per_channel'].items():
-            per_ch[ch] = []
-            for it in lst:
-                s = float(it.get('start', it.get('onset', 0.0)))
-                e = float(it.get('end', it.get('offset', s)))
-                per_ch[ch].append((s, e))
+    def add_per_ch(ch_any, s: float, e: float):
+        if ch_any is None:
+            return
+        if isinstance(ch_any, (list, tuple)):
+            for c in ch_any:
+                add_per_ch(c, s, e)
+            return
+        # dict case: keys can be indexes or names; values truthy -> included
+        if isinstance(ch_any, dict):
+            local_names = ch_any.get('channel_names') if isinstance(ch_any.get('channel_names'), list) else None
+            for k, v in ch_any.items():
+                if k == 'channel_names':
+                    continue
+                if not v:
+                    continue
+                try:
+                    idx = int(k)
+                    name = None
+                    if local_names and 0 <= idx < len(local_names):
+                        name = local_names[idx]
+                    elif top_names and 0 <= idx < len(top_names):
+                        name = top_names[idx]
+                    key = _canon(name if name is not None else str(idx))
+                except Exception:
+                    key = _canon(str(k))
+                per_ch.setdefault(key, []).append((float(s), float(e)))
+            return
+        # scalar name or index
+        if isinstance(ch_any, (int, np.integer)):
+            if top_names and 0 <= int(ch_any) < len(top_names):
+                name = top_names[int(ch_any)]
+                key = _canon(name)
+            else:
+                key = _canon(str(ch_any))
+        else:
+            key = _canon(str(ch_any))
+        per_ch.setdefault(key, []).append((float(s), float(e)))
 
-    # Allow alternative keying like {"C3": [{...}], "C4": [...]}
-    if not per_ch:
-        # Heuristic: if top-level contains channel-like keys
-        for k, v in j.items():
-            if isinstance(v, list) and all(isinstance(it, dict) and ('start' in it or 'onset' in it) for it in v):
-                per_ch[k] = [(float(it.get('start', it.get('onset', 0.0))), float(it.get('end', it.get('offset', 0.0)))) for it in v]
+    for it in ds:
+        if not isinstance(it, dict):
+            continue
+        s = float(it.get('start', it.get('onset', 0.0)))
+        e = float(it.get('end', it.get('offset', s)))
+        global_iv.append((s, e))
+        ch_field = it.get('channels', None)
+        if ch_field is not None:
+            add_per_ch(ch_field, s, e)
 
     return global_iv, per_ch
 
@@ -104,17 +147,15 @@ def parse_label_json(j: Dict) -> Tuple[List[Tuple[float, float]], Dict[str, List
 # -----------------------------
 
 def load_raw_signals(path: Path, pick_channels: List[str], target_sfreq: float) -> Tuple[np.ndarray, List[str], float]:
-    """Load (C,T) data with channel order = pick_channels. Returns (data, picked_names, sfreq)."""
+    """Load (C,T) with channel order = pick_channels. Returns data, picked_names, sfreq."""
     if mne is not None and path.suffix.lower() in ('.edf', '.bdf', '.fif'):
         raw = mne.io.read_raw(path.as_posix(), preload=True, verbose='ERROR')
-        # Rename channels to be safe (strip spaces)
         raw.rename_channels({n: n.strip() for n in raw.ch_names})
         picks = []
         for ch in pick_channels:
             if ch in raw.ch_names:
                 picks.append(ch)
             else:
-                # try case-insensitive match
                 match = [n for n in raw.ch_names if n.lower() == ch.lower()]
                 if match:
                     picks.append(match[0])
@@ -123,14 +164,12 @@ def load_raw_signals(path: Path, pick_channels: List[str], target_sfreq: float) 
         raw.pick(picks)
         if abs(raw.info['sfreq'] - target_sfreq) > 1e-3:
             raw.resample(target_sfreq)
-        data = raw.get_data()  # (C,T)
+        data = raw.get_data()
         return data.astype(np.float32), [ch.strip() for ch in picks], float(raw.info['sfreq'])
 
-    # Fallback: pyedflib for EDF
     if pyedflib is not None and path.suffix.lower() == '.edf':
         f = pyedflib.EdfReader(path.as_posix())
         names = [f.getLabel(i).strip() for i in range(f.signals_in_file)]
-        # map picks
         idxs = []
         for ch in pick_channels:
             if ch in names:
@@ -139,19 +178,21 @@ def load_raw_signals(path: Path, pick_channels: List[str], target_sfreq: float) 
                 idxs.append(names.index(ch.upper()))
             else:
                 raise ValueError(f"Channel '{ch}' not found in {path.name}. Available: {names}")
-        # Assume same sample rate for selected channels
         sfreq = f.getSampleFrequency(idxs[0])
         data = np.vstack([f.readSignal(i) for i in idxs]).astype(np.float32)
         f._close(); del f
-        # Resample if needed
         if abs(sfreq - target_sfreq) > 1e-3:
-            import scipy.signal as sps
+            try:
+                import scipy.signal as sps
+            except Exception:
+                raise RuntimeError("scipy is required for resampling when using pyedflib. pip install scipy")
+            # rational resample
             g = np.gcd(int(sfreq), int(target_sfreq))
             up = int(target_sfreq // g)
             down = int(sfreq // g)
             data = sps.resample_poly(data, up, down, axis=1)
             sfreq = target_sfreq
-        return data, [pick_channels[i] for i in range(len(pick_channels))], float(sfreq)
+        return data, pick_channels, float(sfreq)
 
     raise RuntimeError("No suitable reader for this file. Install mne or pyedflib, or use EDF/BDF/FIF.")
 
@@ -163,7 +204,10 @@ def load_raw_signals(path: Path, pick_channels: List[str], target_sfreq: float) 
 def bandpass(data: np.ndarray, sfreq: float, lo: Optional[float], hi: Optional[float]) -> np.ndarray:
     if lo is None or hi is None:
         return data
-    import scipy.signal as sps
+    try:
+        import scipy.signal as sps
+    except Exception:
+        raise RuntimeError("scipy is required for bandpass filtering. pip install scipy")
     ny = 0.5 * sfreq
     lo_n = max(1e-3, lo / ny)
     hi_n = min(0.999, hi / ny)
@@ -201,7 +245,7 @@ def make_windows(X: np.ndarray, mask_global: np.ndarray, masks_per_ch: Optional[
 
 
 # -----------------------------
-# Main build
+# Build per recording
 # -----------------------------
 
 def build_from_inputs(raw_paths: List[Path], labels_paths: Dict[str, Path], channels: List[str], sfreq: float, win_s: float, stride_s: float, band: Optional[Tuple[float, float]], out_dir: Path):
@@ -212,41 +256,45 @@ def build_from_inputs(raw_paths: List[Path], labels_paths: Dict[str, Path], chan
 
     for rp in raw_paths:
         print(f"Processing {rp.name} ...")
-        # match a label file: exact stem match if available, else use single provided path
+        # Match JSON by stem if a folder of JSONs is provided; else use the single JSON file
         if rp.stem in labels_paths:
             lp = labels_paths[rp.stem]
         elif len(labels_paths) == 1:
             lp = list(labels_paths.values())[0]
         else:
-            raise ValueError(f"No matching JSON for {rp.name}. Provide a single JSON or a json with same stem.")
+            raise ValueError(f"No matching JSON for {rp.name}. Provide a single JSON or matching stems.")
 
-        labels_json = _load_json(lp)
-        glob_iv, per_ch = parse_label_json(labels_json)
+        j = _load_json(lp)
+        glob_iv, per_ch = parse_label_json_viewer(j)
 
         # load raw
-        X, picked, actual_sfreq = load_raw_signals(rp, channels, target_sfreq=sfreq)
+        X, picked, _ = load_raw_signals(rp, channels, target_sfreq=sfreq)
         if band is not None:
             X = bandpass(X, sfreq=sfreq, lo=band[0], hi=band[1])
 
-        # masks
+        # global mask
         mask_global = intervals_to_mask(X.shape[1], sfreq, glob_iv)
+
+        # per-channel masks
         masks_per_ch = None
         if per_ch:
+            def canon(n: str) -> str:
+                n = n.strip().lower()
+                for sep in ('-', '_'):
+                    if sep in n:
+                        n = n.split(sep)[0]
+                return n.upper()
+            name_to_idx = {canon(ch): i for i, ch in enumerate(channels)}
             masks_per_ch = np.zeros((len(channels), X.shape[1]), dtype=np.float32)
-            name_to_idx = {ch: i for i, ch in enumerate(channels)}
             for ch_name, ivs in per_ch.items():
-                if ch_name not in name_to_idx:
-                    # allow case-insensitive match
-                    matches = [k for k in name_to_idx.keys() if k.lower() == ch_name.lower()]
-                    if not matches:
-                        print(f"[WARN] Channel '{ch_name}' in labels not in pick list; skipping its intervals")
-                        continue
-                    ch_idx = name_to_idx[matches[0]]
-                else:
-                    ch_idx = name_to_idx[ch_name]
+                key = canon(ch_name)
+                if key not in name_to_idx:
+                    print(f"[WARN] Label channel '{ch_name}' not in --channels list; skipping")
+                    continue
+                ch_idx = name_to_idx[key]
                 masks_per_ch[ch_idx] = intervals_to_mask(X.shape[1], sfreq, ivs)
 
-        # windows
+        # windowing
         Xw, Yt, Yct = make_windows(X, mask_global, masks_per_ch, sfreq, win_s, stride_s)
         X_all.append(Xw)
         Yt_all.append(Yt)
@@ -265,11 +313,11 @@ def build_from_inputs(raw_paths: List[Path], labels_paths: Dict[str, Path], chan
         np.save(out_dir / 'labels_per_channel.npy', Yct_out)
         print(f"Saved: {out_dir/'labels_per_channel.npy'} shape={Yct_out.shape}")
     else:
-        print("Per-channel labels not detected in JSON -> skipped labels_per_channel.npy")
+        print("Per-channel labels not present -> skipped labels_per_channel.npy")
 
 
 # -----------------------------
-# CLI
+# CLI helpers
 # -----------------------------
 
 def discover_raw_and_labels(raw: Optional[str], raw_dir: Optional[str], labels: Optional[str]) -> Tuple[List[Path], Dict[str, Path]]:
@@ -289,7 +337,7 @@ def discover_raw_and_labels(raw: Optional[str], raw_dir: Optional[str], labels: 
         if not raw_paths:
             raise RuntimeError("No raw files found in raw_dir (looking for .edf/.bdf/.fif)")
 
-    # label files: dict by stem
+    # labels (file or folder). If folder, map by stem
     labels_map: Dict[str, Path] = {}
     if labels:
         lp = Path(labels)
@@ -301,7 +349,7 @@ def discover_raw_and_labels(raw: Optional[str], raw_dir: Optional[str], labels: 
         else:
             raise FileNotFoundError(lp)
     else:
-        # try next to raw file with same stem
+        # try next to each raw file: same stem .json
         for rp in raw_paths:
             j = rp.with_suffix('.json')
             if j.exists():
@@ -316,7 +364,7 @@ def main():
     ap.add_argument('--raw', type=str, default=None, help='Single raw file (edf/bdf/fif)')
     ap.add_argument('--raw_dir', type=str, default=None, help='Folder containing raw files')
     ap.add_argument('--labels', type=str, default=None, help='JSON file or folder of JSONs (matching stems)')
-    ap.add_argument('--channels', type=str, required=True, help='Comma-separated channel list in desired order')
+    ap.add_argument('--channels', type=str, required=True, help='Comma-separated channel list in desired order (e.g., C3,C4,Cz,...)')
     ap.add_argument('--sfreq', type=float, default=200, help='Target sampling frequency')
     ap.add_argument('--win', type=float, default=2.0, help='Window length (seconds)')
     ap.add_argument('--stride', type=float, default=1.0, help='Stride (seconds)')
