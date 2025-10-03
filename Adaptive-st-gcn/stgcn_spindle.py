@@ -5,24 +5,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-"""
-ST-GCN for EEG Spindles — Adaptive prior + learnable + optional dynamic adjacency
-
-Inputs
-  x: (B, C, T)
-
-Outputs (dict)
-  logits_global: (B, T)
-  logits_per_ch: (B, C, T)
-  logit_window:  (B,)
-  A_prior:   (C, C)
-  A_learned: (C, C)
-  A_dynamic: (B, C, C) or None
-
-Notes
-- You can pass an (unnormalized) A_prior. We normalize internally each forward.
-- Use BCEWithLogits + optional Dice/Tversky from your existing losses.py.
-"""
 
 # -----------------------------
 # Utilities

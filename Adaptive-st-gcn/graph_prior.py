@@ -10,7 +10,7 @@ Return A_prior (unnormalized). The ST-GCN model normalizes inside forward.
 
 
 def load_coords_from_csv(csv_path: str, channel_names: List[str], normalize: bool = True) -> torch.Tensor:
-    """Load electrode coords and reorder rows to match channel_names.
+    """this will Load electrode coords and reorder rows to match channel_names.
     CSV columns: name,x,y,z  (z optional; if missing, set z=0)
     Returns: Tensor (C, D) with D=2 or 3
     """
