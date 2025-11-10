@@ -4,7 +4,6 @@ project:
   device: cuda
   entity: "subahininadarajh-basel-university"
 
-# UNet-style data block
 data:
   sfreq: 200.0
   window_sec: 2.0
@@ -73,9 +72,73 @@ eval:
 logging:
   wandb:
     enabled: true
-    project: "CRNN"
+    project: "CRNN-check-model"
     entity: "subahininadarajh-basel-university"
-    tags: ["CRNN"]
+    tags: ["CRNN", "hyperparameter-search"]
 
 log:
   every_steps: 50
+
+# ============================================================
+# W&B SWEEP CONFIGURATION
+# ============================================================
+sweep:
+  enabled: true
+  method: bayes  # Options: grid, random, bayes
+
+  metric:
+    name: val/f1
+    goal: maximize
+
+  parameters:
+    # Learning rate (log scale)
+    trainer.lr:
+      distribution: log_uniform_values
+      min: 0.00001   # 1e-5
+      max: 0.005     # 5e-3
+
+    # Regularization
+    trainer.weight_decay:
+      values: [0.0, 0.001, 0.01, 0.05]
+
+    # Batch size
+    trainer.batch_size:
+      values: [8, 16, 32]
+
+    # Sampling strategy
+    trainer.sampler:
+      values: ["normal", "undersample", "weighted"]
+
+    # Loss function
+    loss.name:
+      values: ["weighted_bce", "focal", "bce", "dice"]
+
+    # Weighted BCE parameters (only used if loss.name = weighted_bce)
+    loss.weighted_bce.pos_weight:
+      values: [2.0, 3.0, 5.0, "auto"]
+
+    loss.weighted_bce.adaptive:
+      values: [true, false]
+
+    # Focal loss parameters (only used if loss.name = focal)
+    loss.focal.gamma:
+      values: [1.0, 2.0, 3.0]
+
+    loss.focal.alpha:
+      values: [0.1, 0.15, 0.25, 0.5]
+
+    # Architecture - Squeeze-Excitation
+    model.use_se:
+      values: [true, false]
+
+    # Architecture - RNN size
+    model.rnn_hidden:
+      values: [64, 128, 256]
+
+    # Architecture - RNN depth
+    model.rnn_layers:
+      values: [1, 2, 3]
+
+    # Architecture - FPN channels
+    model.fpn_ch:
+      values: [64, 128, 256]

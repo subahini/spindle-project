@@ -127,7 +127,7 @@ class AdaptiveGraphConv(nn.Module):
         Z = self.act(Z)
         Z = self.drop(Z)
         return Z, A_prior, A_learned, A_dyn
-
+# need to check if a_dyn is really i am using it ..... do research on diff graph
 
 class STGCNBlock(nn.Module):
     def __init__(
