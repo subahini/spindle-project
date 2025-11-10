@@ -1,4 +1,3 @@
-
 from typing import Dict, Any
 import torch
 import torch.nn.functional as F
@@ -40,6 +39,31 @@ class DiceLoss(nn.Module):
         inter = (p * y).sum()
         dice = (2.0 * inter + self.smooth) / (p.sum() + y.sum() + self.smooth)
         return 1.0 - dice
+
+
+class TverskyLoss(nn.Module):
+    """Tversky Loss - Generalization of Dice Loss with separate FN and FP penalties."""
+
+    def __init__(self, alpha: float = 0.7, beta: float = 0.3, smooth: float = 1.0, logit_clamp: float = 8.0):
+        super().__init__()
+        self.alpha = float(alpha)
+        self.beta = float(beta)
+        self.smooth = float(smooth)
+        self.logit_clamp = float(logit_clamp)
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        logits = torch.clamp(logits, -self.logit_clamp, self.logit_clamp)
+        probs = torch.sigmoid(logits).clamp(1e-8, 1 - 1e-8)
+
+        probs_flat = probs.reshape(-1)
+        targets_flat = targets.reshape(-1)
+
+        tp = (probs_flat * targets_flat).sum()
+        fp = (probs_flat * (1 - targets_flat)).sum()
+        fn = ((1 - probs_flat) * targets_flat).sum()
+
+        tversky = (tp + self.smooth) / (tp + self.alpha * fn + self.beta * fp + self.smooth)
+        return 1.0 - tversky
 
 
 class BCELoss(nn.Module):
@@ -96,14 +120,34 @@ class WeightedBCELoss(nn.Module):
         return F.binary_cross_entropy_with_logits(logits, targets, pos_weight=pw)
 
 
-# ---------- helpers ----------
+# ---------- Helper function for functional dice (only used if needed) ----------
+
+def dice_loss(probs: torch.Tensor, targets: torch.Tensor, smooth: float = 1.0) -> torch.Tensor:
+    """
+    Functional interface for Dice loss. Expects probs (post-sigmoid).
+    Note: Prefer using DiceLoss class for consistency.
+    """
+    probs = probs.clamp(1e-8, 1 - 1e-8)
+    p = probs.reshape(-1)
+    y = targets.reshape(-1)
+    inter = (p * y).sum()
+    dice = (2.0 * inter + smooth) / (p.sum() + y.sum() + smooth)
+    return 1.0 - dice
+
+
+# ---------- Utility functions ----------
 
 def estimate_pos_weight(train_loader, max_batches: int = 10) -> float:
     """Estimate neg/pos ratio from a few batches (targets shape [B,T])."""
     pos_count = 0.0
     total_count = 0.0
     with torch.no_grad():
-        for i, (_, targets) in enumerate(train_loader):
+        for i, batch_list in enumerate(train_loader):
+            # Handle list collation
+            if isinstance(batch_list, list):
+                targets = torch.stack([s['y_t'] for s in batch_list])
+            else:
+                targets = batch_list['y_t']
             pos_count += float(targets.sum().item())
             total_count += float(targets.numel())
             if i + 1 >= max_batches:
@@ -115,7 +159,10 @@ def estimate_pos_weight(train_loader, max_batches: int = 10) -> float:
 
 
 def build_loss_function(loss_name: str, trainer_cfg: Dict[str, Any], train_loader=None) -> nn.Module:
-    """Map config -> loss instance."""
+    """
+    Map config -> loss instance.
+    This is a legacy function - prefer using the classes directly.
+    """
     name = str(loss_name).lower()
 
     if name == "focal":
@@ -129,6 +176,14 @@ def build_loss_function(loss_name: str, trainer_cfg: Dict[str, Any], train_loade
     if name == "dice":
         d = trainer_cfg.get("dice", {})
         return DiceLoss(smooth=float(d.get("smooth", 1.0)))
+
+    if name == "tversky":
+        t = trainer_cfg.get("tversky", {})
+        return TverskyLoss(
+            alpha=float(t.get("alpha", 0.7)),
+            beta=float(t.get("beta", 0.3)),
+            smooth=float(t.get("smooth", 1.0))
+        )
 
     if name == "bce":
         b = trainer_cfg.get("bce", {})

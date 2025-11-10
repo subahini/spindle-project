@@ -1,0 +1,5 @@
+# Train on C3, test on others
+python3 cross_channel_train.py --config config.yaml --train-channel C3 --test-channels C4 F3 F4
+
+# Predict on unlabeled channels
+python3 predict_unlabeled_channels.py --checkpoint best_C3.pt --data data.npy --channels O1 O2

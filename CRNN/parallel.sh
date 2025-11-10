@@ -4,8 +4,8 @@ set -Eeuo pipefail
 
 # ---- user knobs ----
 BASE_CONFIG="config.yaml"
-GPUS=( 2 3 )            # physical GPU ids to consider
-MAX_CONCURRENT=2          # max parallel runs (<= number of GPUs)
+GPUS=( 0 1 2 3 )            # physical GPU ids to consider
+MAX_CONCURRENT=4          # max parallel runs (<= number of GPUs)
 FREE_MEM_MIN=2000         # MiB required free to consider a GPU free
 TIMEOUT_SECS=7200         # per-run timeout (seconds)
 
@@ -116,7 +116,7 @@ data['paths']['out_dir']=f'./checkpoints/{name}'
 
 # W&B configuration
 data['logging']['wandb']['enabled']=True
-data['logging']['wandb']['project']='CRNN-GridSearch-GPU'
+data['logging']['wandb']['project']='CRNN-no-se'
 data['logging']['wandb']['entity']=data['logging'].get('wandb',{}).get('entity','subahininadarajh-basel-university')
 data['logging']['wandb']['name']=f'gpu{gpu_id}_{name}'
 data['logging']['wandb']['tags']=['spindle-detection','CRNN','grid-search',f'gpu:{gpu_id}',f'loss:{loss}',f'lr:{lr}',f'sampler:{sampler}']

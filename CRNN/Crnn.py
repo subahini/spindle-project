@@ -1,4 +1,3 @@
-
 import os, math, json, argparse, time, random, csv
 from dataclasses import dataclass
 from typing import Tuple, List, Dict, Any, Optional
@@ -13,7 +12,6 @@ import wandb
 
 # Optional sklearn for AUCs
 try:
-
     from sklearn.metrics import roc_auc_score, average_precision_score, precision_recall_curve
 
     _HAS_SKLEARN = True
@@ -94,9 +92,10 @@ class Spectrogram(nn.Module):
                        center=self.center, window=self.window, return_complex=True).abs()
         if self.power != 1.0: X = X.pow(self.power)
         return X.reshape(B, C, X.shape[-2], X.shape[-1])
+        #for each EEG channel small “image” showing how frequencies  change over time.
 
 
-class SE2d(nn.Module):
+class SE2d(nn.Module):   #squeeze and excitation ---- learn which channel is important
     def __init__(self, ch, r=8):
         super().__init__()
         self.fc1 = nn.Conv2d(ch, max(1, ch // r), 1);
@@ -122,7 +121,7 @@ class ConvBNReLU(nn.Module):
 
 
 class MultiScaleStem(nn.Module):
-    def __init__(self, in_ch, out_ch, se=True):
+    def __init__(self, in_ch, out_ch, se=True):   # true
         super().__init__()
         mid = max(1, out_ch // 3)
         self.b1 = ConvBNReLU(in_ch, mid, k=3, p=1, se=se)
@@ -157,7 +156,10 @@ class CRNN2D_BiGRU(nn.Module):
                  power: float = 2.0, upsample_mode: str = 'linear'):
         super().__init__()
         self.spec = Spectrogram(sfreq, n_fft, hop_length, win_length, center, power)
-        self.stem = MultiScaleStem(c_in, base_ch, se=use_se)
+        self.stem = MultiScaleStem(c_in, base_ch, se=use_se)  #original
+        #self.stem = ConvBNReLU(c_in, base_ch, k=3, p=1, se=use_se)  #testing what impact multiscale is give the result
+
+        #only pooling alog frequency
         self.b1 = nn.Sequential(ConvBNReLU(base_ch, base_ch, se=use_se), ConvBNReLU(base_ch, base_ch, se=use_se),
                                 nn.AvgPool2d((2, 1)))
         self.b2 = nn.Sequential(ConvBNReLU(base_ch, base_ch * 2, se=use_se), nn.AvgPool2d((2, 1)))
@@ -165,9 +167,17 @@ class CRNN2D_BiGRU(nn.Module):
         self.fpn = FPNLite(base_ch, base_ch * 2, base_ch * 4, fpn_ch)
         self.post_fpn = nn.Conv2d(fpn_ch, fpn_ch, 1)
         self.freq_pool = nn.AdaptiveAvgPool2d((1, None))
-        self.rnn = nn.GRU(fpn_ch, rnn_hidden, num_layers=rnn_layers, batch_first=False, bidirectional=bidirectional)
+        self.rnn = nn.GRU(fpn_ch, rnn_hidden, num_layers=rnn_layers, batch_first=False, bidirectional=bidirectional) #original
+        #self.rnn = nn.GRU(base_ch * 4, rnn_hidden, num_layers=rnn_layers,
+                    #      batch_first=False, bidirectional=bidirectional)
+
+        # self.rnn = nn.GRU(c_in * (n_fft // 2 + 1), rnn_hidden, num_layers=rnn_layers, batch_first=False, bidirectional=bidirectional)# no CNN
         rnn_out = rnn_hidden * (2 if bidirectional else 1)
         self.head = nn.Conv1d(rnn_out, 1, 1)
+
+      #  self.head = nn.Conv1d(fpn_ch, 1, 1)  #no rnn part
+       # self.head = nn.Conv1d(c_in, 1, kernel_size=3, padding=1)  # direct spectrogram→Conv→output
+
         self.upsample_mode = upsample_mode
 
         if bias_init_prior is not None and 0 < bias_init_prior < 1:
@@ -179,24 +189,36 @@ class CRNN2D_BiGRU(nn.Module):
         S = self.spec(x_raw)  # [B,C,F,Ts]
         f1 = self.b1(self.stem(S));
         f2 = self.b2(f1);
-        f3 = self.b3(f2)
+        f3 = self.b3(f2);
         p = self.fpn(f1, f2, f3);
+
         p = F.relu(self.post_fpn(p), inplace=True)
+       # p = f3  # bypass FPN
+
         p = self.freq_pool(p).squeeze(2)  # [B,fpn_ch,Ts]
+        
         seq = p.permute(2, 0, 1)  # [Ts,B,fpn_ch]
         rnn_out, _ = self.rnn(seq)  # [Ts,B,rout]
-        rnn_out = rnn_out.permute(1, 2, 0)  # [B,rout,Ts]
+        rnn_out = rnn_out.permute(1, 2, 0)  # [B,rout,Ts] turning off RNN
         logits = self.head(rnn_out)  # [B,1,Ts]
-
+        # no CNN just RNN
+        
+        #S = self.spec(x_raw)
+        #S =  S.reshape(B, -1, S.shape[-1])   # collapse channels if needed
+        #seq = S.permute(2, 0, 1)  # [Ts,B,F]
+        #rnn_out, _ = self.rnn(seq)
+        #logits = self.head(rnn_out.permute(1, 2, 0))"""
+        #x = S.mean(dim=2)  # average over frequency → [B, C, Ts]
+        #logits = self.head(x)  # [B, 1, Ts]
         # Upsample to sample-level resolution (matching UNet)
         logits = F.interpolate(logits, size=Traw, mode=self.upsample_mode,
                                align_corners=False if self.upsample_mode != 'nearest' else None)
         return logits.squeeze(1)  # [B, Traw]
 
 
-# ----------------- Dataset (returns TUPLES) -----------------
+# ----------------- Dataset (this will returns TUPLES) -----------------
 class EEGDataset(Dataset):
-    """ this Dataset  returns (x, y) tuples ------- losses.py"""
+    """ this Dataset  returns (x, y) tuples -------   losses.py"""
 
     def __init__(self, X, y, normalize="zscore", reference="car"):
         self.X = X.astype(np.float32)
@@ -218,7 +240,7 @@ class EEGDataset(Dataset):
         return torch.from_numpy(x), torch.from_numpy(self.y[i])
 
 
-# ----------------- RAW EDF loading (UNet-style) -----------------
+# ----------------- RAW EDF loading (Keeping UNet-style) -----------------
 def _load_json_labels(path, total_samples, sfreq):
     with open(path, "r") as f:
         labels = json.load(f)
@@ -262,7 +284,7 @@ def split_data(X, y, ratios=(0.7, 0.15, 0.15), seed=42):
     return (X[idx[:n1]], y[idx[:n1]]), (X[idx[n1:n2]], y[idx[n1:n2]]), (X[idx[n2:]], y[idx[n2:]])
 
 
-# ----------------- metrics (simplified, matching UNet) -----------------
+#Metrics
 def confusion_counts(y_true: np.ndarray, y_pred: np.ndarray):
     y_true = y_true.astype(np.int64).reshape(-1)
     y_pred = y_pred.astype(np.int64).reshape(-1)
@@ -282,6 +304,8 @@ def basic_metrics(y_true: np.ndarray, y_pred: np.ndarray):
     return {"precision": p, "recall": r, "f1": f1, "accuracy": acc, "TP": tp, "TN": tn, "FP": fp, "FN": fn}
 
 
+"""
+my hand coded ......
 def roc_curve_manual(y_true: np.ndarray, y_scores: np.ndarray, n_thresholds: int = 101):
     y_true = y_true.astype(np.int64).reshape(-1)
     y_scores = y_scores.reshape(-1)
@@ -308,6 +332,7 @@ def auc_trapezoid(x: np.ndarray, y: np.ndarray) -> float:
         dx = x[i] - x[i - 1]
         area += dx * (y[i] + y[i - 1]) / 2.0
     return float(area)
+"""
 
 
 # ----------------- dataloaders & samplers -----------------
@@ -319,7 +344,7 @@ def build_dataloaders(cfg):
     nw = int(d.get("num_workers", cfg["trainer"]["num_workers"]))
     seed = int(cfg.get("seed", 42))
 
-    # 1) Prefer NPY (exactly like UNet)
+    # 1) Prefer NPY (like u  -net for comparision)
     x_npy, y_npy = d.get("x_npy"), d.get("y_npy")
     if x_npy and y_npy and os.path.exists(x_npy) and os.path.exists(y_npy):
         X = np.load(x_npy, mmap_mode="r")
@@ -372,9 +397,11 @@ class TrainState:
 
 
 def run_eval(dloader, cfg, model, device, split_name="val"):
+    """evaluating only using sklearn------ commented part are manual one """
     model.eval()
-    all_probs = [];
+    all_probs = []
     all_y = []
+
     with torch.no_grad():
         for x, y in dloader:
             x = x.to(device)
@@ -387,11 +414,11 @@ def run_eval(dloader, cfg, model, device, split_name="val"):
     probs = torch.cat(all_probs, dim=0).numpy()  # [N, T]
     y_true = torch.cat(all_y, dim=0).numpy()
 
-    metrics = {"precision": 0.0, "recall": 0.0, "f1": 0.0, "accuracy": 0.0}
-
     y_true_flat = y_true.reshape(-1)
     y_score_flat = probs.reshape(-1)
 
+    """
+    --------------------------this i s manual (commented out, using sklearn now) 
     # Threshold sweep (matching UNet)
     evcfg = cfg.get("eval", {})
     n_th = int(evcfg.get("n_thresholds", 101))
@@ -413,63 +440,96 @@ def run_eval(dloader, cfg, model, device, split_name="val"):
     roc_auc = auc_trapezoid(fpr, tpr)
     metrics["roc_auc"] = roc_auc
 
-    # --- PR-AUC (Average Precision) ---
+    # PR-AUC (Average Precision)
     try:
         pr_auc = float(average_precision_score(y_true_flat, y_score_flat))
         metrics["pr_auc"] = pr_auc
     except Exception:
         pr_auc = None
+    """
 
-    # Optional PR curve plot
-    if plt is not None and wandb.run is not None:
+    # using sklearn
+    # Find best threshold via sklearn PR curve
+    evcfg = cfg.get("eval", {})
+    metric = evcfg.get("metric_for_best", "f1")
+
+    if not _HAS_SKLEARN:
+        print("Warning: sklearn not available, using default threshold 0.5")
+        best_thr = 0.5
+    else:
+
+        precision, recall, thresholds = precision_recall_curve(y_true_flat, y_score_flat)
+        # Calculate F1 at each threshold
+
+        f1_scores = 2 * (precision[:-1] * recall[:-1]) / (precision[:-1] + recall[:-1] + 1e-8)
+        best_idx = np.argmax(f1_scores)
+        best_thr = float(thresholds[best_idx])
+
+    # Get metrics at best threshold
+    preds = (probs >= best_thr).astype(np.int64)
+    best_m = basic_metrics(y_true, preds)
+    best_m["threshold"] = best_thr
+
+    # Compute AUC metrics using sklearn
+    if _HAS_SKLEARN:
         try:
-            if 'precision_recall_curve' in globals():
-                prec, rec, _ = precision_recall_curve(y_true_flat, y_score_flat)
-            else:
-                # Fallback: quick manual sweep (coarse)
-                ths = np.linspace(0.0, 1.0, n_th)
-                prec, rec = [], []
-                for thr in ths:
-                    preds = (y_score_flat >= thr).astype(np.int64)
-                    m = basic_metrics(y_true_flat, preds)
-                    prec.append(m["precision"]);
-                    rec.append(m["recall"])
-                prec, rec = np.array(prec), np.array(rec)
+            best_m["roc_auc"] = float(roc_auc_score(y_true_flat, y_score_flat))
+            best_m["pr_auc"] = float(average_precision_score(y_true_flat, y_score_flat))
+        except Exception as e:
+            print(f"Warning: Could not compute AUC metrics: {e}")
+            best_m["roc_auc"] = 0.0
+            best_m["pr_auc"] = 0.0
+    else:
+        best_m["roc_auc"] = 0.0
+        best_m["pr_auc"] = 0.0
 
+    # Plot sklearn-based PR curve
+    if plt is not None and wandb.run is not None and _HAS_SKLEARN:
+        try:
+            prec, rec, _ = precision_recall_curve(y_true_flat, y_score_flat)
             fig = plt.figure()
-            plt.plot(rec, prec, label=f"PR (AP={pr_auc:.3f})" if pr_auc is not None else "PR")
-            # no-skill baseline = prevalence
-            base = float(y_true_flat.mean()) if y_true_flat.size else 0.0
-            plt.hlines(base, 0, 1, linestyles="dashed", label=f"Baseline={base:.3f}")
-            plt.xlabel("Recall");
-            plt.ylabel("Precision");
+            plt.plot(rec, prec, linewidth=2, label=f"PR (AP={best_m['pr_auc']:.3f})")
+            base = float(y_true_flat.mean())
+            plt.hlines(base, 0, 1, linestyles="dashed", colors='gray', label=f"Baseline={base:.3f}")
+            plt.xlabel("Recall")
+            plt.ylabel("Precision")
+            plt.xlim([0, 2])
+            plt.ylim([0, 2])
             plt.legend(loc="lower left")
-            plt.title(f"Precision–Recall [{split_name}]")
+            plt.title(f"Precision-Recall [{split_name}]")
+            plt.grid(alpha=0.3)
             wandb.log({f"{split_name}/pr_curve": wandb.Image(fig)}, commit=False)
             plt.close(fig)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Warning: Could not plot PR curve: {e}")
 
-    # Plot ROC
-    if plt is not None and wandb.run is not None:
+    # Plot sklearn-based ROC curve
+    if plt is not None and wandb.run is not None and _HAS_SKLEARN:
         try:
+            from sklearn.metrics import roc_curve
+            fpr, tpr, _ = roc_curve(y_true_flat, y_score_flat)
             fig = plt.figure()
-            ax = fig.add_subplot(111)
-            ax.plot(fpr, tpr)
-            ax.plot([0, 1], [0, 1], linestyle="--", linewidth=1)
-            ax.set_xlabel("False Positive Rate")
-            ax.set_ylabel("True Positive Rate")
-            ax.set_title(f"ROC (AUC={roc_auc:.3f}) [{split_name}]")
+            plt.plot(fpr, tpr, linewidth=2, label=f"ROC (AUC={best_m['roc_auc']:.3f})")
+            plt.plot([0, 1], [0, 1], linestyle="--", linewidth=1, color='gray', label="Random")
+            plt.xlabel("False Positive Rate")
+            plt.ylabel("True Positive Rate")
+            plt.xlim([0, 1])
+            plt.ylim([0, 1])
+            plt.legend(loc="lower right")
+            plt.title(f"ROC Curve [{split_name}]")
+            plt.grid(alpha=0.3)
             wandb.log({f"{split_name}/roc_curve": wandb.Image(fig)}, commit=False)
             plt.close(fig)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Warning: Could not plot ROC curve: {e}")
 
-    # Confusion matrix (separate figure)
-    if plt is not None and wandb.run is not None:
+    # Plot confusion matrix using sklearn's confusion_matrix
+    if plt is not None and wandb.run is not None and _HAS_SKLEARN:
         try:
-            tp, tn, fp, fn = metrics["TP"], metrics["TN"], metrics["FP"], metrics["FN"]
-            cm = np.array([[tn, fp], [fn, tp]], dtype=np.int64)
+            from sklearn.metrics import confusion_matrix
+            # Get predictions at best threshold
+            y_pred_flat = (y_score_flat >= best_thr).astype(np.int64)
+            cm = confusion_matrix(y_true_flat, y_pred_flat)
 
             fig_cm = plt.figure(figsize=(6, 5))
             ax = fig_cm.add_subplot(111)
@@ -483,7 +543,6 @@ def run_eval(dloader, cfg, model, device, split_name="val"):
                 ax.set_yticks([0, 1])
                 ax.set_xticklabels(["Pred 0", "Pred 1"])
                 ax.set_yticklabels(["True 0", "True 1"])
-                # Add text annotations
                 for i in range(2):
                     for j in range(2):
                         ax.text(j, i, str(cm[i, j]), ha='center', va='center',
@@ -493,14 +552,31 @@ def run_eval(dloader, cfg, model, device, split_name="val"):
             ax.set_xlabel("Predicted Label", fontsize=12)
             ax.set_ylabel("True Label", fontsize=12)
             ax.set_title(f"Confusion Matrix @thr={best_thr:.2f} [{split_name}]", fontsize=14)
-
             plt.tight_layout()
             wandb.log({f"{split_name}/confusion_matrix": wandb.Image(fig_cm)}, commit=False)
             plt.close(fig_cm)
         except Exception as e:
             print(f"Warning: Could not plot confusion matrix: {e}")
 
-    return probs, y_true, metrics
+    # Loging  metrics table to wandb
+    if wandb.run is not None:
+        prevalence = float(y_true_flat.mean())
+        wandb.log({
+            f"{split_name}/prevalence": prevalence,
+            f"{split_name}/threshold": best_m["threshold"],
+            f"{split_name}/precision": best_m["precision"],
+            f"{split_name}/recall": best_m["recall"],
+            f"{split_name}/f1": best_m["f1"],
+            f"{split_name}/accuracy": best_m["accuracy"],
+            f"{split_name}/roc_auc": best_m["roc_auc"],
+            f"{split_name}/pr_auc": best_m["pr_auc"],
+            f"{split_name}/TP": best_m["TP"],
+            f"{split_name}/TN": best_m["TN"],
+            f"{split_name}/FP": best_m["FP"],
+            f"{split_name}/FN": best_m["FN"],
+        }, commit=False)
+
+    return probs, y_true, best_m
 
 
 def train_and_eval(cfg):
@@ -511,11 +587,22 @@ def train_and_eval(cfg):
     # W&B
     wb = cfg.get("logging", {}).get("wandb", {})
     if wb.get("enabled", True):
-        wandb.init(project=wb.get("project", cfg["project"]["name"]),
-                   entity=wb.get("entity"),
-                   name=wb.get("name"),
-                   tags=wb.get("tags"),
-                   config=cfg)
+        wandb.init(
+            project=wb.get("project", cfg["project"].get("name")),
+            entity=wb.get("entity", cfg["project"].get("entity")),
+            name=wb.get("name", cfg["project"].get("name")),
+            tags=wb.get("tags", []),
+            config=cfg
+        )
+
+        # Log sampler type at start .....hyper paarametwer logging
+
+        wandb.config.update({
+            "sampler": cfg["trainer"].get("sampler", "normal"),
+            "loss_name": cfg["loss"].get("name"),
+            "lr": cfg["trainer"].get("lr"),
+            "batch_size": cfg["trainer"].get("batch_size"),
+        }, allow_val_change=True)
 
     # Data
     ds_tr, ds_va, ds_te, dl_tr, dl_va, dl_te = build_dataloaders(cfg)
@@ -533,10 +620,9 @@ def train_and_eval(cfg):
 
     # Optim & AMP
     opt = torch.optim.AdamW(model.parameters(), lr=cfg["trainer"]["lr"], weight_decay=cfg["trainer"]["weight_decay"])
-  #  scaler = torch.cuda.amp.GradScaler(enabled=(device.type == "cuda") and bool(cfg["trainer"]["amp"]))
     scaler = torch.amp.GradScaler("cuda", enabled=(device.type == "cuda") and bool(cfg["trainer"]["amp"]))
 
-    # Loss from losses.py (now works with tuple dataloaders)
+    # Loss from losses.py --------tuples for losss # error
     criterion = build_loss_function(cfg["loss"].get("name", "weighted_bce"), cfg["loss"], dl_tr)
     print(f"[loss] Using {cfg['loss'].get('name', 'weighted_bce')} from losses.py")
 
@@ -554,9 +640,7 @@ def train_and_eval(cfg):
             logits = model(x)  # [B, T] - sample-level!
 
             opt.zero_grad(set_to_none=True)
-            #with torch.amp.autocast(enabled=scaler.is_enabled()):
             with torch.amp.autocast("cuda", enabled=scaler.is_enabled()):
-
                 loss = criterion(logits.unsqueeze(1), y.unsqueeze(1))
 
             scaler.scale(loss).backward()
@@ -587,7 +671,6 @@ def train_and_eval(cfg):
             "val/FN": m.get("FN"),
             "val/roc_auc": m.get("roc_auc"),
             "val/pr_auc": m.get("pr_auc"),
-
         }
         wandb.log({k: v for k, v in log_payload.items() if v is not None})
         print(
@@ -622,7 +705,6 @@ def train_and_eval(cfg):
             "test/FN": m.get("FN"),
             "test/roc_auc": m.get("roc_auc"),
             "test/pr_auc": m.get("pr_auc"),
-
         }
         wandb.log({k: v for k, v in test_payload.items() if v is not None})
         print(
