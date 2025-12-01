@@ -1,0 +1,25 @@
+data_root: "../data"
+edf_subdir: "edf"
+label_subdir: "labels"
+
+# one channel at a time (will be overridden by CLI if you want)
+channel: "F4"
+
+wandb:
+  project: "$Debug_bnaseline"
+  entity: "subahininadarajh-basel-university"
+  run_name_prefix: "schimicek"
+
+schimicek:
+  fs: null              # null = use EDF sfreq
+  spindle_band: [11.5, 16.0]
+  alpha_band: [5.0, 12.0]
+  muscle_band: [30.0, 40.0]
+
+  amplitude_threshold_uv: 25.0
+  min_duration_s: 0.5
+
+  epoch_length_s: 5.0
+  alpha_ratio_threshold: 1.2
+  muscle_rms_threshold_uv: 5.0
+  filter_order: 2

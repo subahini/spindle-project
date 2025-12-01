@@ -18,8 +18,8 @@ data:
   edf:
     dir: "../data/edf"
     labels_json: "../data/labels/sleep_block_spindle_output_P002_1.json"
-  x_npy: null
-  y_npy: null
+  x_npy: "../data/processed_data/X_all.npy"
+  y_npy: "../data/processed_data/X_all.npy"
 
 paths:
   out_dir: "./checkpoints"
