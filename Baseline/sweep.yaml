@@ -1,0 +1,37 @@
+method: bayes   # or "random" if you want something simpler
+
+metric:
+  name: global/event_f1    # this is what you log in all_data.py
+  goal: maximize
+
+program: all_data.py
+run_cap: 120
+command:
+  - python
+  - ${program}
+  - --config
+  - config.yaml
+  - ${args}       # change to C4/F3/F4 if you want another channel
+
+parameters:
+  channel:
+    values: [ "C3", "C4" ,"F3","F4"]
+  schimicek.amplitude_threshold_uv:
+    distribution: uniform
+    min: 10.0
+    max: 40.0
+
+  schimicek.min_duration_s:
+    distribution: uniform
+    min: 0.3
+    max: 0.8
+
+  schimicek.alpha_ratio_threshold:
+    distribution: uniform
+    min: 0.8
+    max: 2.0
+
+  schimicek.muscle_rms_threshold_uv:
+    distribution: uniform
+    min: 2.0
+    max: 10.0

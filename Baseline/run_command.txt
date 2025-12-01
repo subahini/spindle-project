@@ -1,0 +1,14 @@
+Step 1:
+
+wandb sweep --project spindel_debug --entity subahininadarajh-basel-university sweep.yaml                ----------------# please Copy the sweep ID
+
+example :
+80wvtkz2 is sweep id (my sweep id...  change it to yours )
+wandb agent subahininadarajh-basel-university/spindle-project-Baseline/80wvtkz2
+
+
+Step 2:
+
+then run :tmux new -s schimicek_sweep wandb agent subahininadarajh-basel-university/spindel_debug/abc123xy
+                                    or
+wandb agent subahininadarajh-basel-university/spindel_debug/abc123xy
