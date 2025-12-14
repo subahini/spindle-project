@@ -218,27 +218,37 @@ class CRNN2D_BiGRU(nn.Module):
 
 # ----------------- Dataset (this will returns TUPLES) -----------------
 class EEGDataset(Dataset):
-    """ this Dataset  returns (x, y) tuples -------   losses.py"""
 
-    def __init__(self, X, y, normalize="zscore", reference="car"):
-        self.X = X.astype(np.float32)
-        self.y = y.astype(np.float32)
+    def __init__(self, X_memmap, y_memmap, indices,
+                 normalize="zscore", reference="car", channel_indices=None):
+        self.X = X_memmap          # np.memmap, shape (N, C, T)
+        self.y = y_memmap          # np.memmap, shape (N, T)
+        self.indices = np.asarray(indices)
         self.normalize = normalize
         self.reference = reference
-
+        self.channel_indices = channel_indices
     def __len__(self):
-        return len(self.X)
+        return len(self.indices)
 
     def __getitem__(self, i):
-        x = self.X[i]
+        idx = int(self.indices[i])
+
+        x = self.X[idx]    # loads one window from disk
+        y = self.y[idx]
+        if self.channel_indices is not None:
+            x = x[self.channel_indices, :]  # (19, T)
+        # referencing
         if self.reference == "car":
             x = x - x.mean(axis=0, keepdims=True)
+
+        # normalization
         if self.normalize == "zscore":
             mu = x.mean(axis=-1, keepdims=True)
             sd = x.std(axis=-1, keepdims=True) + 1e-6
             x = (x - mu) / sd
-        return torch.from_numpy(x), torch.from_numpy(self.y[i])
 
+        return torch.from_numpy(x.astype(np.float32)), \
+               torch.from_numpy(y.astype(np.float32))
 
 # ----------------- RAW EDF loading (Keeping UNet-style) -----------------
 def _load_json_labels(path, total_samples, sfreq):
@@ -275,14 +285,21 @@ def load_edf_windows(edf_path, json_path, cfg_data):
     return np.stack(Xs, 0), np.stack(Ys, 0)  # [N,C,Tw], [N,Tw]
 
 
-def split_data(X, y, ratios=(0.7, 0.15, 0.15), seed=42):
-    rng = np.random.default_rng(seed)
-    idx = np.arange(len(X));
-    rng.shuffle(idx)
-    n1 = int(ratios[0] * len(X));
-    n2 = int((ratios[0] + ratios[1]) * len(X))
-    return (X[idx[:n1]], y[idx[:n1]]), (X[idx[n1:n2]], y[idx[n1:n2]]), (X[idx[n2:]], y[idx[n2:]])
 
+def split_data(n_samples, ratios=(0.7, 0.15, 0.15), seed=42):
+
+    rng = np.random.default_rng(seed)
+    idx = np.arange(n_samples)
+    rng.shuffle(idx)
+
+    n1 = int(ratios[0] * n_samples)
+    n2 = int((ratios[0] + ratios[1]) * n_samples)
+
+    idx_tr = idx[:n1]
+    idx_va = idx[n1:n2]
+    idx_te = idx[n2:]
+
+    return idx_tr, idx_va, idx_te
 
 #Metrics
 def confusion_counts(y_true: np.ndarray, y_pred: np.ndarray):
@@ -334,58 +351,78 @@ def auc_trapezoid(x: np.ndarray, y: np.ndarray) -> float:
     return float(area)
 """
 
-
-# ----------------- dataloaders & samplers -----------------
 def build_dataloaders(cfg):
-    """Build dataloaders matching UNet's structure"""
+    """Build dataloaders matching UNet's structure, memory-safe."""
     d = cfg["data"]
     sig = cfg.get("signal", {})
     bs = int(d.get("batch_size", cfg["trainer"]["batch_size"]))
     nw = int(d.get("num_workers", cfg["trainer"]["num_workers"]))
     seed = int(cfg.get("seed", 42))
 
-    # 1) Prefer NPY (like u  -net for comparision)
+    # 1) Prefer NPY
     x_npy, y_npy = d.get("x_npy"), d.get("y_npy")
     if x_npy and y_npy and os.path.exists(x_npy) and os.path.exists(y_npy):
+        # memmap load: stays on disk
         X = np.load(x_npy, mmap_mode="r")
         y = np.load(y_npy, mmap_mode="r")
+
+        # ---- select only the 19 EEG channels we care about ----
+        # indices based on processed_data/metadata.json channel order
+        channel_indices = [7, 8, 27, 28, 17, 18, 15, 13, 19, 14, 16,
+                           44, 45, 46, 47, 30, 35, 31, 29]
+        #X = X[:, channel_indices, :]   # shape: (N, 19, 400)
+
     else:
-        # 2) RAW fallback: use FIRST EDF in dir
+        # 2) RAW fallback: use FIRST EDF in dir (small experiments only)
         edf_dir = d["edf"]["dir"]
-        edfs = sorted([f for f in os.listdir(edf_dir) if f.lower().endswith(".edf")])
+        edfs = sorted([f for f in os.listdir(edf_dir)
+                       if f.lower().endswith(".edf")])
         if not edfs:
             raise RuntimeError(f"No EDF files found in {edf_dir}. Provide NPY or add EDFs.")
-        X, y = load_edf_windows(os.path.join(edf_dir, edfs[0]), d["edf"]["labels_json"], d)
+        X, y = load_edf_windows(os.path.join(edf_dir, edfs[0]),
+                                d["edf"]["labels_json"], d)
+        channel_indices = None
+    # number of windows
+    n_samples = X.shape[0]
 
-    # split in memory
-    (Xtr, Ytr), (Xva, Yva), (Xte, Yte) = split_data(X, y, seed=seed)
-    train_ds = EEGDataset(Xtr, Ytr, normalize=sig.get("normalize", "zscore"), reference=sig.get("reference", "car"))
-    val_ds = EEGDataset(Xva, Yva, normalize=sig.get("normalize", "zscore"), reference=sig.get("reference", "car"))
-    test_ds = EEGDataset(Xte, Yte, normalize=sig.get("normalize", "zscore"), reference=sig.get("reference", "car"))
+    # split into train / val / test using indices only
+    idx_tr, idx_va, idx_te = split_data(n_samples, seed=seed)
 
-    # sampler options
+    # build datasets WITHOUT copying full arrays
+    ds_tr = EEGDataset(X, y, idx_tr,
+                       normalize=sig.get("normalize", "zscore"),
+                       reference=sig.get("reference", "car"),
+                       channel_indices=channel_indices)
+    ds_va = EEGDataset(X, y, idx_va,
+                       normalize=sig.get("normalize", "zscore"),
+                       reference=sig.get("reference", "car"),
+                       channel_indices=channel_indices)
+    ds_te = EEGDataset(X, y, idx_te,
+                       normalize=sig.get("normalize", "zscore"),
+                       reference=sig.get("reference", "car"),
+                       channel_indices=channel_indices)
+
+    # sampler options – for safety, only "normal" is supported here
     sampler_mode = cfg["trainer"].get("sampler", "normal").lower()
-    if sampler_mode == "undersample":
-        labels = (Ytr.sum(1) > 0).astype(int)
-        pos_idx = np.where(labels == 1)[0];
-        neg_idx = np.where(labels == 0)[0]
-        n = min(len(pos_idx), len(neg_idx))
-        sel = np.concatenate([np.random.choice(pos_idx, n, False), np.random.choice(neg_idx, n, False)])
-        sampler = torch.utils.data.SubsetRandomSampler(sel)
-        train_loader = DataLoader(train_ds, batch_size=bs, sampler=sampler, num_workers=nw, pin_memory=True)
-    elif sampler_mode == "weighted":
-        labels = (Ytr.sum(1) > 0).astype(int)
-        class_count = np.bincount(labels);
-        w = 1.0 / class_count
-        sample_w = w[labels];
-        sampler = WeightedRandomSampler(sample_w, len(sample_w))
-        train_loader = DataLoader(train_ds, batch_size=bs, sampler=sampler, num_workers=nw, pin_memory=True)
-    else:
-        train_loader = DataLoader(train_ds, batch_size=bs, shuffle=True, num_workers=nw, pin_memory=True)
+    if sampler_mode != "normal":
+        print(f"[WARN] sampler='{sampler_mode}' not supported with memmap yet; "
+              "falling back to normal shuffle.")
+        sampler_mode = "normal"
 
-    val_loader = DataLoader(val_ds, batch_size=bs, shuffle=False, num_workers=nw, pin_memory=True)
-    test_loader = DataLoader(test_ds, batch_size=bs, shuffle=False, num_workers=nw, pin_memory=True)
-    return train_ds, val_ds, test_ds, train_loader, val_loader, test_loader
+    if sampler_mode == "normal":
+        train_loader = DataLoader(ds_tr, batch_size=bs, shuffle=True,
+                                  num_workers=nw, pin_memory=True)
+    else:
+        # (we never actually reach here; just in case)
+        train_loader = DataLoader(ds_tr, batch_size=bs, shuffle=True,
+                                  num_workers=nw, pin_memory=True)
+
+    val_loader = DataLoader(ds_va, batch_size=bs, shuffle=False,
+                            num_workers=nw, pin_memory=True)
+    test_loader = DataLoader(ds_te, batch_size=bs, shuffle=False,
+                             num_workers=nw, pin_memory=True)
+
+    return ds_tr, ds_va, ds_te, train_loader, val_loader, test_loader
 
 
 # ----------------- trainer & eval -----------------
@@ -493,8 +530,8 @@ def run_eval(dloader, cfg, model, device, split_name="val"):
             plt.hlines(base, 0, 1, linestyles="dashed", colors='gray', label=f"Baseline={base:.3f}")
             plt.xlabel("Recall")
             plt.ylabel("Precision")
-            plt.xlim([0, 2])
-            plt.ylim([0, 2])
+            plt.xlim([0, 1])
+            plt.ylim([0, 1])
             plt.legend(loc="lower left")
             plt.title(f"Precision-Recall [{split_name}]")
             plt.grid(alpha=0.3)

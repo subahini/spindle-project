@@ -1,4 +1,4 @@
-method: bayes   # or "random" if you want something simpler
+method: bayes   #
 
 metric:
   name: global/event_f1    # this is what you log in all_data.py
