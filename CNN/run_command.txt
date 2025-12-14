@@ -1,0 +1,16 @@
+For training with ONE subject:
+
+data_mode: "single_subject_edf"     in config.yaml
+
+run :python cnn_train.py --config config.yaml
+
+
+sweep :
+wandb sweep sweep.yaml
+wandb agent <project name>/spindle_cnn2d/<sweep_id>
+
+For full dataset:
+
+data_mode: "full_dataset_npy"
+run :python cnn_train.py --config config.yaml
+v

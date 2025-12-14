@@ -1,0 +1,33 @@
+# sweep.yaml
+program: cnn_train.py
+method: bayes
+metric:
+  name: val_f1
+  goal: maximize
+
+parameters:
+  loss_name:
+    values: ["weighted_bce", "focal", "dice"]
+  learning_rate:
+    values: [1e-5, 3e-5, 1e-4, 3e-4]
+  weight_decay:
+    values: [0.0, 1e-5, 1e-4]
+  sampling:
+    values: ["none", "weighted_sampler"]
+  batch_size:
+    values: [32, 64, 96]
+
+command:
+  - ${env}
+  - python
+  - ${program}
+  - --loss_name
+  - ${loss_name}
+  - --learning_rate
+  - ${learning_rate}
+  - --weight_decay
+  - ${weight_decay}
+  - --sampling
+  - ${sampling}
+  - --batch_size
+  - ${batch_size}
