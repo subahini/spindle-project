@@ -13,4 +13,3 @@ For full dataset:
 
 data_mode: "full_dataset_npy"
 run :python cnn_train.py --config config.yaml
-v
