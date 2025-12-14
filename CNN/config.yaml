@@ -1,0 +1,102 @@
+# ===============================
+#  CONFIG FOR 2D CNN SPINDLE MODEL
+# ===============================
+
+# ---------------------
+# DATA MODE
+# ---------------------
+data_mode: "single_subject_edf"   # options: "single_subject_edf", "full_dataset_npy"
+
+# ---------------------
+# SINGLE SUBJECT – MULTIPLE FILES
+# ---------------------
+subject_files:
+  # List of EDF + JSON pairs for ONE subject
+  # >>> Replace these three example files with your real files <<<
+  - edf: "./data/raw/P001_1.edf"
+    json: "./data/labels/P001_1.json"
+  - edf: "./data/raw/P001_2.edf"
+    json: "./data/labels/P001_2.json"
+  - edf: "./data/raw/P001_3.edf"
+    json: "./data/labels/P001_3.json"
+
+# Channels to use. If empty → use first N channels.
+channels:
+  use_channel_names: false
+  names: []              # ["C3", "C4", "F3", "F4"]
+  n_channels: 16         # used when names=[]
+
+# ---------------------
+# WINDOWING FOR EDF MODE
+# ---------------------
+windowing:
+  window_sec: 2.0
+  step_sec: 1.0
+  overlap_threshold: 0.3     # min fraction of spindle samples to assign label 1
+
+# ---------------------
+# FILTERING
+# ---------------------
+filter:
+  hp_freq: 10.0
+  lp_freq: 15.0
+
+# ---------------------
+# NPY MODE (full dataset)
+# ---------------------
+npy_data:
+  data_dir: "./data/processed_data"
+  x_file: "X_all.npy"
+  y_file: "y_all.npy"
+
+# ---------------------
+# TRAIN/VAL/TEST SPLIT
+# ---------------------
+splits:
+  test_size: 0.15
+  val_size: 0.15
+  random_state: 42
+
+# ---------------------
+# TRAINING HYPERPARAMETERS
+# ---------------------
+training:
+  num_epochs: 50
+  batch_size: 64
+  learning_rate: 1e-4
+  weight_decay: 1e-5
+  num_workers: 4
+  early_stopping_patience: 8
+  threshold: 0.5
+
+# ---------------------
+# LOSS FUNCTION
+# ---------------------
+loss:
+  name: "weighted_bce"      # options: weighted_bce, focal, dice, bce
+
+  weighted_bce:
+    pos_weight: "auto"      # "auto" or a number
+    adaptive: false
+    target_pos_rate: 0.1
+    label_smoothing: 0.03
+
+  focal:
+    alpha: 0.15
+    gamma: 3.0
+    label_smoothing: 0.05
+
+  dice:
+    smooth: 1.0
+
+# ---------------------
+# SAMPLING
+# ---------------------
+sampling:
+  type: "none"               # options: none, weighted_sampler
+
+# ---------------------
+# DEVICE
+# ---------------------
+device:
+  preferred: "cuda"          # fallback will be "cpu"
