@@ -14,9 +14,9 @@ from sklearn.metrics import roc_curve, precision_recall_curve, auc
 from schimicek_spindle import detect_spindles_schimicek, SchimicekParams
 
 
-# =========================
+
 # Sample-Level Metrics
-# =========================
+
 def evaluate_mask(pred_mask: np.ndarray, true_mask: np.ndarray):
     """Compute sample-level confusion matrix metrics."""
     pred = np.asarray(pred_mask, dtype=bool).ravel()
@@ -46,9 +46,9 @@ def evaluate_mask(pred_mask: np.ndarray, true_mask: np.ndarray):
     }
 
 
-# =========================
-# Event-Level Metrics
-# =========================
+
+# # Event-Level Metrics====
+
 def mask_to_events(mask: np.ndarray, fs: float) -> list:
     """Convert boolean mask to list of (start_idx, end_idx) tuples."""
     events = []
@@ -72,7 +72,7 @@ def mask_to_events(mask: np.ndarray, fs: float) -> list:
 def evaluate_events(pred_mask: np.ndarray, true_mask: np.ndarray,
                     fs: float, tolerance_samples: int = None) -> dict:
     """
-    Compute event-level metrics.
+    Computing  event-level metrics.
 
     An event is considered a true positive if it overlaps with a ground truth event
     within tolerance_samples (default: 0.5 seconds worth of samples).
@@ -126,9 +126,7 @@ def evaluate_events(pred_mask: np.ndarray, true_mask: np.ndarray,
     }
 
 
-# =========================
 # Data Loading
-# =========================
 def load_mask(json_path, sfreq, n_samples, channel):
     with open(json_path, "r") as f:
         data = json.load(f)
@@ -156,11 +154,10 @@ def load_mask(json_path, sfreq, n_samples, channel):
     return mask
 
 
-# =========================
-# Main Evaluation
-# =========================
+# Main
+
 def main(args):
-    # ------------- load config -------------
+    # ------------- loading config -------------
     cfg_path = args.config
     with open(cfg_path, "r") as f:
         cfg = yaml.safe_load(f)
@@ -205,7 +202,7 @@ def main(args):
         reinit=True,
     )
 
-    # ===== CRITICAL FIX: Override cfg with wandb.config sweep parameters =====
+
     print("\n" + "=" * 70)
     print("[SWEEP PARAMETER CHECK]")
     print("=" * 70)
@@ -229,7 +226,7 @@ def main(args):
     print(f"  muscle_rms_threshold_uv: {cfg['schimicek']['muscle_rms_threshold_uv']}")
     print("=" * 70 + "\n")
 
-    # (rest of your code: EDF loop, metrics, logging)
+
 
     edf_files = sorted(glob.glob(os.path.join(edf_dir, "*.edf")))
     print(f"Channel: {channel}")
@@ -308,16 +305,24 @@ def main(args):
         wandb.log({f"{base}/sample_{k}": v for k, v in rec_sample_metrics.items()})
         wandb.log({f"{base}/event_{k}": v for k, v in rec_event_metrics.items()})
 
-        scores = results["peak_to_peak"].astype(float)
-        p2p_min, p2p_max = scores.min(), scores.max()
-        if p2p_max > p2p_min:
-            scores = (scores - p2p_min) / (p2p_max - p2p_min)
-        else:
-            scores = np.zeros_like(scores)
+        p2p   = results["peak_to_peak"].astype(float)
+        cand  = results["candidate_mask"].astype(bool)
+        final = results["spindle_mask"].astype(bool)
+
+        amp_thr = cfg["schimicek"]["amplitude_threshold_uv"]
+
+        # base score from amplitude relative to threshold
+        base = p2p / (amp_thr + 1e-8)
+
+        # build param-dependent scores
+        scores = np.zeros_like(base, dtype=float)
+        scores[cand] = np.clip(base[cand], 0.0, 2.0)
+        scores[final] = np.clip(base[final] + 0.5, 0.0, 2.5)
 
         all_true.append(true_mask.astype(int))
         all_pred.append(results["spindle_mask"].astype(int))
         all_scores.append(scores)
+
         all_sample_metrics.append(rec_sample_metrics)
         all_event_metrics.append(rec_event_metrics)
 
@@ -329,6 +334,14 @@ def main(args):
     y_true = np.concatenate(all_true)
     y_pred = np.concatenate(all_pred)
     scores = np.concatenate(all_scores)
+    # ---- GLOBAL NORMALIZATION ----
+    s_min = scores.min()
+    s_max = scores.max()
+    if s_max > s_min:
+        scores = (scores - s_min) / (s_max - s_min + 1e-8)
+    else:
+        # All scores are identical → just set to zeros
+        scores = np.zeros_like(scores)
 
     scores_2d = np.stack([1.0 - scores, scores], axis=1)
     class_names = ["no_spindle", "spindle"]

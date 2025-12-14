@@ -18,8 +18,8 @@ data:
   edf:
     dir: "../data/edf"
     labels_json: "../data/labels/sleep_block_spindle_output_P002_1.json"
-  x_npy: "../data/processed_data/X_all.npy"
-  y_npy: "../data/processed_data/X_all.npy"
+  x_npy: #"../data/processed_data/X_all.npy"
+  y_npy: #"../data/processed_data/y_all.npy"
 
 paths:
   out_dir: "./checkpoints"
@@ -39,7 +39,7 @@ spectrogram:
 model:
   in_channels: 19
   base_ch: 32
-  fpn_ch: 128
+  fpn_ch: 64
   rnn_hidden: 128
   rnn_layers: 2
   bidirectional: true
@@ -49,21 +49,25 @@ model:
 
 trainer:
   epochs: 70
-  batch_size: 16
-  lr: 0.0003
+  batch_size: 32
+  lr: 0.00021006078389965613
   weight_decay: 0.01
   amp: true
   grad_clip: 1.0
   num_workers: 4
-  sampler: undersample
-
+  sampler: normal
 loss:
-  name: weighted_bce
+  name: focal
+  focal:
+    alpha: 0.25
+    gamma: 3
+    label_smoothing: 0.05
   weighted_bce:
-    pos_weight: auto
-    adaptive: true
+    pos_weight: 2
+    adaptive: false
     target_pos_rate: 0.10
     label_smoothing: 0.03
+
 
 eval:
   n_thresholds: 101
@@ -72,9 +76,9 @@ eval:
 logging:
   wandb:
     enabled: true
-    project: "CRNN-check-model"
+    project: "CRNN_full"
     entity: "subahininadarajh-basel-university"
-    tags: ["CRNN", "hyperparameter-search"]
+    tags: ["CRNN", "fixed-hper"]
 
 log:
   every_steps: 50

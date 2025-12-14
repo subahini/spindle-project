@@ -3,12 +3,12 @@ edf_subdir: "edf"
 label_subdir: "labels"
 
 # one channel at a time (will be overridden by CLI if you want)
-channel: "F4"
+channel: "C3"
 
 wandb:
-  project: "$Debug_bnaseline"
+  project: "$Bseling_prfix"
   entity: "subahininadarajh-basel-university"
-  run_name_prefix: "schimicek"
+  run_name_prefix: "Channel"
 
 schimicek:
   fs: null              # null = use EDF sfreq
