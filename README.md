@@ -86,7 +86,7 @@ The model uses a lightweight 1D CNN that:
 **Subahini Nadarajh**  
 subahini.nadarajh@stud.unibas.ch
 
-Examiner & Supervisor: Prof. Dr. Volker Roth
+Examiner & Supervisor: Prof. Dr. Volker Roth 
 Supervisor: Florentin Bieder
 Project Collaborators: Prof. Alex Datta and Dr. Martina Studer (UKBB)
 
