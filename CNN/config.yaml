@@ -1,102 +1,129 @@
-# ===============================
-#  CONFIG FOR 2D CNN SPINDLE MODEL
-# ===============================
+# config.yaml - FIXED CNN Configuration
 
-# ---------------------
+# ===============================
 # DATA MODE
-# ---------------------
-data_mode: "single_subject_edf"   # options: "single_subject_edf", "full_dataset_npy"
-
-# ---------------------
-# SINGLE SUBJECT – MULTIPLE FILES
-# ---------------------
+# ===============================
+data_mode: "single_subject_edf"
+# or
+# ===============================
+# SUBJECT FILES (IMPORTANT: files split BEFORE windowing)
+# ===============================
 subject_files:
-  # List of EDF + JSON pairs for ONE subject
-  # >>> Replace these three example files with your real files <<<
-  - edf: "./data/raw/P001_1.edf"
-    json: "./data/labels/P001_1.json"
-  - edf: "./data/raw/P001_2.edf"
-    json: "./data/labels/P001_2.json"
-  - edf: "./data/raw/P001_3.edf"
-    json: "./data/labels/P001_3.json"
+  # Add ALL your EDF + JSON pairs here
+  # Minimum 5 files recommended for proper train/val/test split
+  - edf: "../data/raw/P002_1_raw.edf"
+    json: "../data/labels/sleep_block_spindle_output_P002_1.json"
+  - edf: "../data/raw/P002_2_raw.edf"
+    json: "../data/labels/sleep_block_spindle_output_P002_2.json"
+  - edf: "../data/raw/P002_3_raw.edf"
+    json: "../data/labels/sleep_block_spindle_output_P002_3.json"
 
-# Channels to use. If empty → use first N channels.
-channels:
-  use_channel_names: false
-  names: []              # ["C3", "C4", "F3", "F4"]
-  n_channels: 16         # used when names=[]
 
-# ---------------------
-# WINDOWING FOR EDF MODE
-# ---------------------
-windowing:
-  window_sec: 2.0
-  step_sec: 1.0
-  overlap_threshold: 0.3     # min fraction of spindle samples to assign label 1
 
-# ---------------------
-# FILTERING
-# ---------------------
-filter:
-  hp_freq: 10.0
-  lp_freq: 15.0
-
-# ---------------------
-# NPY MODE (full dataset)
-# ---------------------
+#data_mode: "full_dataset_npy"
 npy_data:
-  data_dir: "./data/processed_data"
+  data_dir: "/path/to/processed_data"
   x_file: "X_all.npy"
   y_file: "y_all.npy"
 
-# ---------------------
+# ===============================
+# CHANNELS (CRNN-style)
+# ===============================
+channels:
+  use_channel_names: true
+  names: ["C3", "C4", "O1", "O2", "Fp1", "Fp2", "F7", "F3", "Fz", "F4", "F8",
+          "T3", "T4", "T5", "T6", "P3", "Pz", "P4", "Oz"]
+  n_channels: 19  # Used if names is empty
+
+# ===============================
+# FILTERING (spindle band)
+# ===============================
+filter:
+  hp_freq: 5.0
+  lp_freq: 30.0
+
+# ===============================
+# WINDOWING PARAMETERS
+# ===============================
+windowing:
+  window_sec: 2.0
+  step_sec: 1.0  # 50% overlap
+  overlap_threshold: 0.3  # Label=1 if >=30% spindle samples
+
+# ===============================
 # TRAIN/VAL/TEST SPLIT
-# ---------------------
+# ===============================
 splits:
-  test_size: 0.15
-  val_size: 0.15
+  # Files are split FIRST (prevents data leakage!)
+  test_size: 0.20
+  val_size: 0.20
   random_state: 42
 
-# ---------------------
+# ===============================
+# MODEL ARCHITECTURE
+# ===============================
+model:
+  dropout_rate: 0.4
+
+# ===============================
 # TRAINING HYPERPARAMETERS
-# ---------------------
+# ===============================
 training:
   num_epochs: 50
   batch_size: 64
   learning_rate: 1e-4
   weight_decay: 1e-5
   num_workers: 4
-  early_stopping_patience: 8
-  threshold: 0.5
+  early_stopping_patience: 9999
 
-# ---------------------
-# LOSS FUNCTION
-# ---------------------
+# ===============================
+# LOSS FUNCTION (Simplified - pick ONE strategy)
+# ===============================
 loss:
-  name: "weighted_bce"      # options: weighted_bce, focal, dice, bce
+  name: "weighted_bce"  # Options: weighted_bce, focal, dice, bce
 
+  # Weighted BCE settings
   weighted_bce:
-    pos_weight: "auto"      # "auto" or a number
+    pos_weight: "auto"
     adaptive: false
     target_pos_rate: 0.1
-    label_smoothing: 0.03
+    label_smoothing: 0.0  # Keep 0
 
+  # Focal Loss settings
   focal:
-    alpha: 0.15
-    gamma: 3.0
-    label_smoothing: 0.05
+    alpha: 0.25
+    gamma: 2.0
+    label_smoothing: 0.0  # MUST be 0 for focal
 
+  # Dice Loss settings
   dice:
     smooth: 1.0
 
-# ---------------------
-# SAMPLING
-# ---------------------
-sampling:
-  type: "none"               # options: none, weighted_sampler
+  # Plain BCE settings
+  bce:
+    label_smoothing: 0.0
 
-# ---------------------
+# ===============================
+# SAMPLING STRATEGY
+# ===============================
+sampling:
+  # Options: "none", "weighted_sampler"
+  #  Don't use weighted_sampler with weighted_bce (redundant!)
+  type: "none"
+
+# ===============================
 # DEVICE
-# ---------------------
+# ===============================
 device:
-  preferred: "cuda"          # fallback will be "cpu"
+  preferred: "cuda"
+
+
+# ===============================
+# WANDB
+# ===============================
+wandb:
+  enabled: true
+  project: "spindle_cnn2d"
+  entity: "subahininadarajh-basel-university"
+  run_name: null    # or "cnn_debug" or anything you like
+  log_val_plots_every: 1
