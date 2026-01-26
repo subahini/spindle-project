@@ -7,20 +7,30 @@ project:
 data:
   sfreq: 200.0
   window_sec: 2.0
-  step_sec: 1.0
-  batch_size: 16
+  step_sec: 2.0
+  batch_size: 8
   num_workers: 4
   channels: ["C3", "C4", "O1", "O2", "Fp1", "Fp2", "F7", "F3", "Fz", "F4", "F8",
              "T3", "T4", "T5", "T6", "P3", "Pz", "P4", "Oz"]
   filter:
-    low: 5.0
+    low: 1.0
     high: 30.0
-  edf:
-    dir: "../data/edf"
-    labels_json: "../data/labels/sleep_block_spindle_output_P002_1.json"
-  x_npy: #"../data/processed_data/X_all.npy"
-  y_npy: #"../data/processed_data/y_all.npy"
 
+
+  #x_npy: "/data/subahini.nadarajh/data/processed_data/X_all.npy"
+  # y_npy: "/data/subahini.nadarajh/data/processed_data/y_all.npy"
+  x_npy: "./first_sub_processed_data/X_all.npy  " # (N,19,T)
+  y_npy: "./first_sub_processed_data/y_all.npy  " # (N,T)
+
+
+
+  edf:
+    dir: "./data/edf"
+    labels_json: "./data/labels/sleep_block_spindle_output_P002_1.json"
+ # x_npy: "/data/subahini.nadarajh/"
+ # y_npy: "/data/subahini.nadarajh/data/processed_data/y_all.npy"
+   # x_npy: ./first_sub_processed_data/X_all.npy   # (N,19,T)
+    #y_npy: ./first_sub_processed_data/y_all.npy   # (N,T)
 paths:
   out_dir: "./checkpoints"
 
@@ -50,9 +60,9 @@ model:
 trainer:
   epochs: 70
   batch_size: 32
-  lr: 0.00021006078389965613
+  lr: 0.0001
   weight_decay: 0.01
-  amp: true
+  amp: false
   grad_clip: 1.0
   num_workers: 4
   sampler: normal
@@ -60,7 +70,7 @@ loss:
   name: focal
   focal:
     alpha: 0.25
-    gamma: 3
+    gamma: 1
     label_smoothing: 0.05
   weighted_bce:
     pos_weight: 2
@@ -76,7 +86,7 @@ eval:
 logging:
   wandb:
     enabled: true
-    project: "CRNN_full"
+    project: "New_CRNN_full"
     entity: "subahininadarajh-basel-university"
     tags: ["CRNN", "fixed-hper"]
 

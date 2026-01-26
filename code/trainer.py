@@ -5,7 +5,7 @@ Trainer for sample-level models (1D: [B,C,T], 2D: [B,1,C,T]) with inline losses.
 Features
 - choose optimizer: sgd | adam | adamw
 - choose loss: bce | bce_pos | focal | dice | hybrid
-- focal/dice/hybrid params can come from Hydra's composed cfg (.hydra/config.yaml) or CLI
+- focal/dice/hybrid params can come from Hydra's composed cfg (.hydra/config70.yaml) or CLI
 - early stopping on val loss, grad clipping, optional W&B logging
 - quick per-epoch validation confusion (threshold from cfg.eval.threshold or 0.5)
 
@@ -461,10 +461,10 @@ class SpindleTrainer:
         return run
 
     def _load_hydra_cfg(self) -> Optional[Dict[str, Any]]:
-        """Try to read the composed Hydra config saved at ./.hydra/config.yaml."""
+        """Try to read the composed Hydra config saved at ./.hydra/config70.yaml."""
         if not _HAS_OMEGACONF:
             return None
-        path = os.path.join(os.getcwd(), ".hydra", "config.yaml")
+        path = os.path.join(os.getcwd(), ".hydra", "config70.yaml")
         if not os.path.exists(path):
             return None
         try:

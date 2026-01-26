@@ -1,4 +1,4 @@
-# config.yaml - FIXED CNN Configuration
+# config70.yaml - FIXED CNN Configuration
 
 # ===============================
 # DATA MODE
@@ -39,14 +39,14 @@ channels:
 # FILTERING (spindle band)
 # ===============================
 filter:
-  hp_freq: 5.0
+  hp_freq: 1.0
   lp_freq: 30.0
 
 # ===============================
 # WINDOWING PARAMETERS
 # ===============================
 windowing:
-  window_sec: 2.0
+  window_sec: 5cd CNN.0
   step_sec: 1.0  # 50% overlap
   overlap_threshold: 0.3  # Label=1 if >=30% spindle samples
 

@@ -83,6 +83,15 @@ def train():
 
     # Apply sweep parameters to config
     cfg = apply_sweep_config(base_cfg, sweep_params)
+    # --- make each sweep run use its own cache folder ---
+    cache = cfg.setdefault("data", {}).setdefault("cache", {})
+    base_cache = cache.get("dir", "../data/cache_crnn")
+    cache["dir"] = os.path.join(base_cache, f"sweep_{run.id}")
+    cache["rebuild"] = True  # safe for sweeps
+
+    # --- stabilize dataloader ---
+    cfg["data"]["num_workers"] = 0
+    cfg.setdefault("trainer", {})["num_workers"] = 0
 
     # Update W&B config settings - DON'T call wandb.init again!
     wb_cfg = cfg.setdefault('logging', {}).setdefault('wandb', {})

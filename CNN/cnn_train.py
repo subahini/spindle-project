@@ -4,6 +4,7 @@ import wandb
 import mne
 import numpy as np
 import torch
+import matplotlib.pyplot as plt
 
 from pathlib import Path
 from torch import optim
@@ -13,6 +14,8 @@ from sklearn.metrics import (
     roc_auc_score,
     average_precision_score,
     precision_recall_curve,
+    roc_curve,
+    confusion_matrix,
 )
 
 from models import SpindleCNN
@@ -20,21 +23,10 @@ from losses import build_loss_function
 
 
 # ============================================================
-# JSON LOADER (CRNN-COMPATIBLE: detected_spindles dict OR list)
+# JSON LOADER (detected_spindles dict OR list)
 # ============================================================
 
 def load_spindles_from_json(json_path: str):
-    """
-    Supports both dataset variants:
-
-    Variant A:
-    {"detected_spindles": {"0": {"start":..,"end":..}, ...}}
-
-    Variant B:
-    {"detected_spindles": [{"start":..,"end":..}, ...]}
-
-    Returns: list[(start_sec, end_sec)]
-    """
     with open(json_path, "r") as f:
         data = json.load(f)
 
@@ -49,35 +41,27 @@ def load_spindles_from_json(json_path: str):
 
     pairs = []
     for ev in iterable:
-        if isinstance(ev, dict) and ("start" in ev) and ("end" in ev):
+        if isinstance(ev, dict) and "start" in ev and "end" in ev:
             try:
                 pairs.append((float(ev["start"]), float(ev["end"])))
             except Exception:
                 pass
-
     pairs.sort(key=lambda x: x[0])
     return pairs
 
 
 # ============================================================
-# EDF -> preprocessing -> sample-labels -> windows -> window-labels
+# EDF -> preprocess -> sample labels -> windows
 # ============================================================
 
 def preprocess_raw(raw: mne.io.BaseRaw, channels, hp, lp):
     raw.pick(channels)
-    raw.set_eeg_reference("average", verbose=False)   # average reference
-    raw.filter(hp, lp, verbose=False)                 # bandpass
-    return raw.get_data()                             # (C, T)
+    raw.set_eeg_reference("average", verbose=False)
+    raw.filter(hp, lp, verbose=False)
+    return raw.get_data()  # (C, T)
 
 
 def make_windows(data, labels, sfreq, win_s, step_s, overlap_thr):
-    """
-    data:   (C, T)
-    labels: (T,) 0/1 sample-level
-    Return:
-      X: (N, 1, C, win)
-      y: (N, 1) window label
-    """
     win = int(win_s * sfreq)
     step = int(step_s * sfreq)
 
@@ -90,8 +74,8 @@ def make_windows(data, labels, sfreq, win_s, step_s, overlap_thr):
         frac = labels[start:end].mean()
         y_win = 1.0 if frac >= overlap_thr else 0.0
 
-        X_list.append(seg[None, :, :])   # (1, C, win)
-        y_list.append([y_win])           # (1,)
+        X_list.append(seg[None, :, :])  # (1, C, win)
+        y_list.append([y_win])          # (1,)
 
     X = np.stack(X_list).astype(np.float32)
     y = np.asarray(y_list, dtype=np.float32)
@@ -112,7 +96,6 @@ def load_single_file(edf_path: str, json_path: str, cfg):
         cfg["filter"]["lp_freq"],
     )
 
-    # sample-level labels
     labels = np.zeros(data.shape[1], dtype=np.float32)
     for s_sec, e_sec in load_spindles_from_json(json_path):
         s = int(max(0, np.floor(s_sec * sfreq)))
@@ -120,11 +103,8 @@ def load_single_file(edf_path: str, json_path: str, cfg):
         if e > s:
             labels[s:e] = 1.0
 
-    # windows + window labels
     return make_windows(
-        data,
-        labels,
-        sfreq,
+        data, labels, sfreq,
         cfg["windowing"]["window_sec"],
         cfg["windowing"]["step_sec"],
         cfg["windowing"]["overlap_threshold"],
@@ -132,7 +112,7 @@ def load_single_file(edf_path: str, json_path: str, cfg):
 
 
 # ============================================================
-# FILE-LEVEL SPLIT (NO LEAKAGE)
+# FILE SPLIT (prevents leakage)
 # ============================================================
 
 def build_data_splits_fixed(cfg):
@@ -171,51 +151,7 @@ def build_data_splits_fixed(cfg):
 
 
 # ============================================================
-# W&B INTERACTIVE PLOTS (NOT IMAGES) — CRNN-STYLE
-# ============================================================
-def wandb_log_interactive_curves(prefix, y_true, y_score, step):
-    """
-    W&B interactive PR/ROC curves using y_true + probs_2d (works with your wandb version)
-    """
-    if wandb.run is None:
-        return
-
-    y_true = np.asarray(y_true).reshape(-1).astype(np.int64)
-    y_score = np.asarray(y_score).reshape(-1).astype(np.float32)
-
-    # IMPORTANT: probs for BOTH classes -> shape [N,2]
-    probs_2d = np.vstack([1.0 - y_score, y_score]).T
-
-    wandb.log({
-        f"{prefix}/roc_curve": wandb.plot.roc_curve(
-            y_true,
-            probs_2d,
-            labels=["non-spindle", "spindle"],
-        ),
-        f"{prefix}/pr_curve": wandb.plot.pr_curve(
-            y_true,
-            probs_2d,
-            labels=["non-spindle", "spindle"],
-        ),
-    }, step=step)
-def wandb_log_interactive_confusion(prefix, y_true, y_pred, step):
-    if wandb.run is None:
-        return
-
-    y_true = np.asarray(y_true).reshape(-1).astype(np.int64)
-    y_pred = np.asarray(y_pred).reshape(-1).astype(np.int64)
-
-    wandb.log({
-        f"{prefix}/confusion_matrix": wandb.plot.confusion_matrix(
-            y_true=y_true,
-            preds=y_pred,
-            class_names=["non-spindle", "spindle"],
-        )
-    }, step=step)
-
-
-# ============================================================
-# METRICS
+# THRESHOLD (best F1)
 # ============================================================
 
 def find_best_threshold(y_true_int, y_score):
@@ -224,6 +160,72 @@ def find_best_threshold(y_true_int, y_score):
         return 0.5
     f1 = 2 * precision[:-1] * recall[:-1] / (precision[:-1] + recall[:-1] + 1e-8)
     return float(thresholds[int(np.argmax(f1))])
+
+
+# ============================================================
+# LOG PLOTS AS IMAGES INTO W&B RUN (Media -> Images)
+# ============================================================
+
+def log_pr_roc_cm_images(prefix, y_true_int, y_score, y_pred_int, pr_auc, roc_auc, thr, step):
+    if wandb.run is None:
+        return
+
+    y_true_int = np.asarray(y_true_int).reshape(-1).astype(np.int32)
+    y_score = np.asarray(y_score).reshape(-1).astype(np.float32)
+    y_pred_int = np.asarray(y_pred_int).reshape(-1).astype(np.int32)
+
+    # --- PR curve image ---
+    try:
+        prec, rec, _ = precision_recall_curve(y_true_int, y_score)
+        fig = plt.figure()
+        plt.plot(rec, prec, linewidth=2, label=f"AP={pr_auc:.4f}")
+        base = float(y_true_int.mean())
+        plt.hlines(base, 0, 1, linestyles="dashed", colors="gray", label=f"Baseline={base:.4f}")
+        plt.xlabel("Recall")
+        plt.ylabel("Precision")
+        plt.title("PR Curve (sklearn)")
+        plt.grid(alpha=0.3)
+        plt.legend(loc="lower left")
+        wandb.log({f"{prefix}/pr_curve": wandb.Image(fig)}, step=step)
+        plt.close(fig)
+    except Exception as e:
+        print(f"[WARN] PR image log failed: {e}")
+
+    # --- ROC curve image ---
+    try:
+        fpr, tpr, _ = roc_curve(y_true_int, y_score)
+        fig = plt.figure()
+        plt.plot(fpr, tpr, linewidth=2, label=f"AUC={roc_auc:.4f}")
+        plt.plot([0, 1], [0, 1], linestyle="--", linewidth=1, color="gray", label="Random")
+        plt.xlabel("False Positive Rate")
+        plt.ylabel("True Positive Rate")
+        plt.title("ROC Curve (sklearn)")
+        plt.grid(alpha=0.3)
+        plt.legend(loc="upper left")
+        wandb.log({f"{prefix}/roc_curve": wandb.Image(fig)}, step=step)
+        plt.close(fig)
+    except Exception as e:
+        print(f"[WARN] ROC image log failed: {e}")
+
+    # --- Confusion matrix image ---
+    try:
+        cm = confusion_matrix(y_true_int, y_pred_int)
+        fig, ax = plt.subplots(figsize=(5, 4))
+        ax.imshow(cm, cmap="Blues")
+        ax.set_xticks([0, 1]); ax.set_yticks([0, 1])
+        ax.set_xticklabels(["Pred 0", "Pred 1"])
+        ax.set_yticklabels(["True 0", "True 1"])
+        ax.set_xlabel("Predicted")
+        ax.set_ylabel("True")
+        ax.set_title(f"Confusion Matrix @thr={thr:.2f}")
+        for i in range(2):
+            for j in range(2):
+                ax.text(j, i, str(cm[i, j]), ha="center", va="center", fontsize=12)
+        plt.tight_layout()
+        wandb.log({f"{prefix}/confusion_matrix": wandb.Image(fig)}, step=step)
+        plt.close(fig)
+    except Exception as e:
+        print(f"[WARN] CM image log failed: {e}")
 
 
 # ============================================================
@@ -240,7 +242,7 @@ def evaluate(model, loader, criterion, device):
             x = x.to(device, non_blocking=True)
             y = y.to(device, non_blocking=True)
 
-            logits = model(x)                      # (B,1)
+            logits = model(x)  # (B,1)
             loss = criterion(logits, y)
             total_loss += loss.item() * x.size(0)
 
@@ -288,7 +290,6 @@ def evaluate(model, loader, criterion, device):
 def train_one_epoch(model, loader, criterion, optimizer, device):
     model.train()
     total_loss = 0.0
-
     for x, y in loader:
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
@@ -349,7 +350,7 @@ def main():
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
 
     num_epochs = int(cfg["training"]["num_epochs"])
-    log_val_plots_every = int(wandb_cfg.get("log_val_plots_every", 1))
+    log_plots_every = int(wandb_cfg.get("log_val_plots_every", 1))
 
     print("\n============================================================")
     print("CNN TRAINING (WINDOW-LEVEL)")
@@ -361,16 +362,18 @@ def main():
 
     for epoch in range(1, num_epochs + 1):
         train_loss = train_one_epoch(model, train_loader, criterion, optimizer, device)
-
         val = evaluate(model, val_loader, criterion, device)
 
-        # Interactive plots into W&B Charts (NOT images)
-        if log_val_plots_every <= 1 or (epoch % log_val_plots_every == 0):
-            
-            wandb_log_interactive_curves("val", val["y_true"], val["y_score"], step=epoch)
-            wandb_log_interactive_confusion("val", val["y_true"], val["y_pred"], step=epoch)
+        # ---- log PR/ROC/CM IMAGES into THIS run ----
+        if log_plots_every <= 1 or (epoch % log_plots_every == 0):
+            log_pr_roc_cm_images(
+                "val",
+                val["y_true"], val["y_score"], val["y_pred"],
+                pr_auc=val["pr_auc"], roc_auc=val["roc_auc"], thr=val["threshold"],
+                step=epoch
+            )
 
-        # Scalars (same step=epoch)
+        # scalars
         wandb.log({
             "epoch": epoch,
             "train/loss": train_loss,
@@ -387,12 +390,16 @@ def main():
             f"val_f1={val['f1']:.4f} | val_pr_auc={val['pr_auc']:.4f}"
         )
 
-    # FINAL TEST (new step so it never goes backwards)
+    # FINAL TEST
     test = evaluate(model, test_loader, criterion, device)
     final_step = num_epochs + 1
 
-    wandb_log_interactive_curves("test", test["y_true"], test["y_score"], step=final_step)
-    wandb_log_interactive_confusion("test", test["y_true"], test["y_pred"], step=final_step)
+    log_pr_roc_cm_images(
+        "test",
+        test["y_true"], test["y_score"], test["y_pred"],
+        pr_auc=test["pr_auc"], roc_auc=test["roc_auc"], thr=test["threshold"],
+        step=final_step
+    )
 
     wandb.log({
         "test/loss": test["loss"],

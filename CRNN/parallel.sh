@@ -135,7 +135,7 @@ run_job() {
   local log_file="logs_parallel/${name}_gpu${gpu_id}.log"
   export CUDA_VISIBLE_DEVICES=$gpu_id
   local t0; t0=$(date +%s)
-  if timeout $TIMEOUT_SECS python3 Crnn.py --config "$cfg_file" >"$log_file" 2>&1; then
+  if timeout $TIMEOUT_SECS python3 Crnn_c3.py --config "$cfg_file" >"$log_file" 2>&1; then
     local t1; t1=$(date +%s); local mins=$(( (t1-t0)/60 ))
     # Extract best F1 from log
     local best_f1 best_roc_auc best_pr_auc
