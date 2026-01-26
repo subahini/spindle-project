@@ -43,7 +43,7 @@ check_wandb() {
 # Function to initialize sweep
 init_sweep() {
     echo -e "${YELLOW}Initializing W&B sweep...${NC}"
-    python3 sweepTrainer.py --init --config "$CONFIG"
+    python3 sweepTrainer70.py --init --config "$CONFIG"
 
     echo -e "\n${YELLOW}Enter the sweep ID from above:${NC}"
     read -r SWEEP_ID

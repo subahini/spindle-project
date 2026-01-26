@@ -1,4 +1,4 @@
-# config.yaml (updated for EDF + JSON labels)
+# config70.yaml (updated for EDF + JSON labels)
 
 model:
   name: unet1d        # unet1d | tcn1d | cnn2d

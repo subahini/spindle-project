@@ -35,7 +35,7 @@ command:
   - python
   - ${program}
   - --config
-  - config.yaml
+  - config70.yaml
   - --loss_name
   - ${loss_name}
   - --learning_rate

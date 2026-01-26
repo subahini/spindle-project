@@ -10,7 +10,7 @@ command:
   - python
   - ${program}
   - --config
-  - config.yaml
+  - config70.yaml
   - ${args}       # change to C4/F3/F4 if you want another channel
 
 parameters:

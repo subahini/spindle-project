@@ -1,4 +1,4 @@
 This is the command give for test diff model layers
 
 
-CUDA_VISIBLE_DEVICES=3 WANDB_NAME="Normal_final" python sweepTrainer.py   --config config.yaml   --loss.focal.alpha=0.25   --loss.focal.gamma=3   --loss.name=focal   --loss.weighted_bce.adaptive=False   --loss.weighted_bce.pos_weight=2   --model.fpn_ch=64   --model.rnn_hidden=128   --model.rnn_layers=2   --model.use_se=True   --trainer.batch_size=32   --trainer.lr=0.00021006078389965613   --trainer.sampler=normal   --trainer.weight_decay=0.01
+CUDA_VISIBLE_DEVICES=3 WANDB_NAME="Normal_final" python sweepTrainer.py   --config config.yaml   --loss.focal.alpha=0.25   --loss.focal.gamma=3   --loss.name=focal  --loss.weighted_bce.adaptive=False   --loss.weighted_bce.pos_weight=2   --model.fpn_ch=64   --model.rnn_hidden=128   --model.rnn_layers=2   --model.use_se=True   --trainer.batch_size=32  --trainer.lr=0.00021006078389965613   --trainer.sampler=normal   --trainer.weight_decay=0.01

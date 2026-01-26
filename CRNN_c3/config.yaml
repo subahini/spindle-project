@@ -20,7 +20,20 @@ data:
     labels_json: "../data/labels/sleep_block_spindle_output_P002_1.json"
   x_npy: null
   y_npy: null
+  splits:
+    train:
+      edf_dir: "../data/train/edf"
+      json_dir: "../data/train/json"
+    val:
+      edf_dir: "../data/val/edf"
+      json_dir: "../data/val/json"
+    test:
+      edf_dir: "../data/test/edf"
+      json_dir: "../data/test/json"
 
+    cache:
+      dir: "../data/cache_crnn"   # where memmaps go
+      rebuild: false             # set true once to regenerate
 paths:
   out_dir: "./checkpoints"
 

@@ -2,11 +2,12 @@ import os, math, json, argparse, time, random, csv
 from dataclasses import dataclass
 from typing import Tuple, List, Dict, Any, Optional
 
+
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
+from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler, Sampler
 import yaml
 import wandb
 
@@ -73,6 +74,103 @@ def apply_overrides(cfg, args):
     return cfg
 
 
+# ----------------- SAMPLERS (FIXED) -----------------
+class UndersamplingSampler(Sampler):
+    """Undersample majority class to balance dataset."""
+
+    def __init__(self, labels, indices, target_ratio=1.0, seed=42):
+        """
+        Args:
+            labels: Full label array (memmap) - shape (N, T)
+            indices: Indices for this split (train/val/test)
+            target_ratio: pos/neg ratio to achieve (1.0 = balanced)
+            seed: Random seed
+        """
+        self.indices = np.asarray(indices)
+        self.seed = seed
+
+        # Calculate positive samples per window
+        pos_counts = np.array([labels[i].sum() for i in self.indices])
+        self.pos_mask = pos_counts > 0
+        self.neg_mask = ~self.pos_mask
+
+        n_pos = self.pos_mask.sum()
+        n_neg = self.neg_mask.sum()
+
+        print(f"[UndersamplingSampler] Pos windows: {n_pos}, Neg windows: {n_neg}")
+
+        # Keep all positive samples
+        self.pos_indices = self.indices[self.pos_mask]
+        self.neg_indices = self.indices[self.neg_mask]
+
+        # Undersample negatives
+        self.n_neg_keep = int(n_pos / target_ratio)
+        if self.n_neg_keep > n_neg:
+            self.n_neg_keep = n_neg
+            print(f"[UndersamplingSampler] Warning: Not enough negative samples. Using all {n_neg}")
+
+        print(f"[UndersamplingSampler] Target: {len(self.pos_indices)} pos, {self.n_neg_keep} neg")
+
+    def __iter__(self):
+        # Shuffle and sample negatives each epoch
+        rng = np.random.default_rng(self.seed + int(time.time()))
+
+        # Sample negatives
+        if self.n_neg_keep < len(self.neg_indices):
+            neg_sampled = rng.choice(self.neg_indices, size=self.n_neg_keep, replace=False)
+        else:
+            neg_sampled = self.neg_indices
+
+        # Combine and shuffle
+        combined = np.concatenate([self.pos_indices, neg_sampled])
+        rng.shuffle(combined)
+
+        return iter(combined.tolist())
+
+    def __len__(self):
+        return len(self.pos_indices) + self.n_neg_keep
+
+
+def build_weighted_sampler(labels, indices, seed=42):
+    """
+    Build WeightedRandomSampler based on positive sample frequency.
+    Windows with more positive samples get higher weight.
+    """
+    indices = np.asarray(indices)
+
+    # Calculate positive ratio per window
+    pos_ratios = np.array([labels[i].mean() for i in indices])
+
+    # Compute weights: inverse of class frequency
+    # Windows with spindles (pos_ratio > 0) get higher weight
+    weights = np.ones(len(indices), dtype=np.float32)
+
+    pos_mask = pos_ratios > 0
+    neg_mask = ~pos_mask
+
+    n_pos = pos_mask.sum()
+    n_neg = neg_mask.sum()
+
+    if n_pos > 0 and n_neg > 0:
+        # Weight inversely proportional to class frequency
+        weights[pos_mask] = n_neg / n_pos
+        weights[neg_mask] = 1.0
+
+        # Normalize
+        weights = weights / weights.sum() * len(weights)
+
+    print(f"[WeightedSampler] Pos windows: {n_pos}, Neg windows: {n_neg}")
+    if n_pos > 0:
+        print(
+            f"[WeightedSampler] Avg weight - pos: {weights[pos_mask].mean():.2f}, neg: {weights[neg_mask].mean():.2f}")
+
+    return WeightedRandomSampler(
+        weights=weights.tolist(),
+        num_samples=len(indices),
+        replacement=True
+    )
+
+
 # ----------------- spectrogram & model -----------------
 class Spectrogram(nn.Module):
     def __init__(self, sfreq: int, n_fft: int, hop_length: int, win_length: int, center: bool = True,
@@ -92,10 +190,9 @@ class Spectrogram(nn.Module):
                        center=self.center, window=self.window, return_complex=True).abs()
         if self.power != 1.0: X = X.pow(self.power)
         return X.reshape(B, C, X.shape[-2], X.shape[-1])
-        #for each EEG channel small “image” showing how frequencies  change over time.
 
 
-class SE2d(nn.Module):   #squeeze and excitation ---- learn which channel is important
+class SE2d(nn.Module):
     def __init__(self, ch, r=8):
         super().__init__()
         self.fc1 = nn.Conv2d(ch, max(1, ch // r), 1);
@@ -121,7 +218,7 @@ class ConvBNReLU(nn.Module):
 
 
 class MultiScaleStem(nn.Module):
-    def __init__(self, in_ch, out_ch, se=True):   # true
+    def __init__(self, in_ch, out_ch, se=True):
         super().__init__()
         mid = max(1, out_ch // 3)
         self.b1 = ConvBNReLU(in_ch, mid, k=3, p=1, se=se)
@@ -156,10 +253,8 @@ class CRNN2D_BiGRU(nn.Module):
                  power: float = 2.0, upsample_mode: str = 'linear'):
         super().__init__()
         self.spec = Spectrogram(sfreq, n_fft, hop_length, win_length, center, power)
-        self.stem = MultiScaleStem(c_in, base_ch, se=use_se)  #original
-        #self.stem = ConvBNReLU(c_in, base_ch, k=3, p=1, se=use_se)  #testing what impact multiscale is give the result
+        self.stem = MultiScaleStem(c_in, base_ch, se=use_se)
 
-        #only pooling alog frequency
         self.b1 = nn.Sequential(ConvBNReLU(base_ch, base_ch, se=use_se), ConvBNReLU(base_ch, base_ch, se=use_se),
                                 nn.AvgPool2d((2, 1)))
         self.b2 = nn.Sequential(ConvBNReLU(base_ch, base_ch * 2, se=use_se), nn.AvgPool2d((2, 1)))
@@ -167,16 +262,10 @@ class CRNN2D_BiGRU(nn.Module):
         self.fpn = FPNLite(base_ch, base_ch * 2, base_ch * 4, fpn_ch)
         self.post_fpn = nn.Conv2d(fpn_ch, fpn_ch, 1)
         self.freq_pool = nn.AdaptiveAvgPool2d((1, None))
-        self.rnn = nn.GRU(fpn_ch, rnn_hidden, num_layers=rnn_layers, batch_first=False, bidirectional=bidirectional) #original
-        #self.rnn = nn.GRU(base_ch * 4, rnn_hidden, num_layers=rnn_layers,
-                    #      batch_first=False, bidirectional=bidirectional)
-
-        # self.rnn = nn.GRU(c_in * (n_fft // 2 + 1), rnn_hidden, num_layers=rnn_layers, batch_first=False, bidirectional=bidirectional)# no CNN
+        self.rnn = nn.GRU(fpn_ch, rnn_hidden, num_layers=rnn_layers, batch_first=False,
+                          bidirectional=bidirectional)
         rnn_out = rnn_hidden * (2 if bidirectional else 1)
         self.head = nn.Conv1d(rnn_out, 1, 1)
-
-      #  self.head = nn.Conv1d(fpn_ch, 1, 1)  #no rnn part
-       # self.head = nn.Conv1d(c_in, 1, kernel_size=3, padding=1)  # direct spectrogram→Conv→output
 
         self.upsample_mode = upsample_mode
 
@@ -186,57 +275,47 @@ class CRNN2D_BiGRU(nn.Module):
 
     def forward(self, x_raw: torch.Tensor) -> torch.Tensor:
         B, C, Traw = x_raw.shape
-        S = self.spec(x_raw)  # [B,C,F,Ts]
+        S = self.spec(x_raw)
         f1 = self.b1(self.stem(S));
         f2 = self.b2(f1);
         f3 = self.b3(f2);
         p = self.fpn(f1, f2, f3);
 
         p = F.relu(self.post_fpn(p), inplace=True)
-       # p = f3  # bypass FPN
+        p = self.freq_pool(p).squeeze(2)
 
-        p = self.freq_pool(p).squeeze(2)  # [B,fpn_ch,Ts]
-        
-        seq = p.permute(2, 0, 1)  # [Ts,B,fpn_ch]
-        rnn_out, _ = self.rnn(seq)  # [Ts,B,rout]
-        rnn_out = rnn_out.permute(1, 2, 0)  # [B,rout,Ts] turning off RNN
-        logits = self.head(rnn_out)  # [B,1,Ts]
-        # no CNN just RNN
-        
-        #S = self.spec(x_raw)
-        #S =  S.reshape(B, -1, S.shape[-1])   # collapse channels if needed
-        #seq = S.permute(2, 0, 1)  # [Ts,B,F]
-        #rnn_out, _ = self.rnn(seq)
-        #logits = self.head(rnn_out.permute(1, 2, 0))"""
-        #x = S.mean(dim=2)  # average over frequency → [B, C, Ts]
-        #logits = self.head(x)  # [B, 1, Ts]
-        # Upsample to sample-level resolution (matching UNet)
+        seq = p.permute(2, 0, 1)
+        rnn_out, _ = self.rnn(seq)
+        rnn_out = rnn_out.permute(1, 2, 0)
+        logits = self.head(rnn_out)
+
         logits = F.interpolate(logits, size=Traw, mode=self.upsample_mode,
                                align_corners=False if self.upsample_mode != 'nearest' else None)
-        return logits.squeeze(1)  # [B, Traw]
+        return logits.squeeze(1)
 
 
-# ----------------- Dataset (this will returns TUPLES) -----------------
+# ----------------- Dataset -----------------
 class EEGDataset(Dataset):
 
     def __init__(self, X_memmap, y_memmap, indices,
                  normalize="zscore", reference="car", channel_indices=None):
-        self.X = X_memmap          # np.memmap, shape (N, C, T)
-        self.y = y_memmap          # np.memmap, shape (N, T)
+        self.X = X_memmap
+        self.y = y_memmap
         self.indices = np.asarray(indices)
         self.normalize = normalize
         self.reference = reference
         self.channel_indices = channel_indices
+
     def __len__(self):
         return len(self.indices)
 
     def __getitem__(self, i):
         idx = int(self.indices[i])
 
-        x = self.X[idx]    # loads one window from disk
+        x = self.X[idx]
         y = self.y[idx]
         if self.channel_indices is not None:
-            x = x[self.channel_indices, :]  # (19, T)
+            x = x[self.channel_indices, :]
         # referencing
         if self.reference == "car":
             x = x - x.mean(axis=0, keepdims=True)
@@ -248,9 +327,10 @@ class EEGDataset(Dataset):
             x = (x - mu) / sd
 
         return torch.from_numpy(x.astype(np.float32)), \
-               torch.from_numpy(y.astype(np.float32))
+            torch.from_numpy(y.astype(np.float32))
 
-# ----------------- RAW EDF loading (Keeping UNet-style) -----------------
+
+# ----------------- RAW EDF loading -----------------
 def _load_json_labels(path, total_samples, sfreq):
     with open(path, "r") as f:
         labels = json.load(f)
@@ -266,13 +346,13 @@ def _load_json_labels(path, total_samples, sfreq):
 def load_edf_windows(edf_path, json_path, cfg_data):
     assert mne is not None, "Install mne to read RAW EDF (pip install mne)"
     raw = mne.io.read_raw_edf(edf_path, preload=True, verbose=False)
-    raw.set_eeg_reference("average", verbose=False)  # CAR
+    raw.set_eeg_reference("average", verbose=False)
     raw.filter(cfg_data["filter"]["low"], cfg_data["filter"]["high"], verbose=False)
     raw.pick(cfg_data["channels"])
     sf_target = cfg_data["sfreq"]
     if abs(raw.info["sfreq"] - sf_target) > 0.1:
         raw.resample(sfreq=sf_target, verbose=False)
-    data = raw.get_data()  # [C, T]
+    data = raw.get_data()
     C, T = data.shape
     y_full = _load_json_labels(json_path, T, raw.info["sfreq"])
     win = int(cfg_data["window_sec"] * raw.info["sfreq"])
@@ -282,12 +362,10 @@ def load_edf_windows(edf_path, json_path, cfg_data):
         e = s + win
         Xs.append(data[:, s:e])
         Ys.append(y_full[s:e])
-    return np.stack(Xs, 0), np.stack(Ys, 0)  # [N,C,Tw], [N,Tw]
-
+    return np.stack(Xs, 0), np.stack(Ys, 0)
 
 
 def split_data(n_samples, ratios=(0.7, 0.15, 0.15), seed=42):
-
     rng = np.random.default_rng(seed)
     idx = np.arange(n_samples)
     rng.shuffle(idx)
@@ -301,7 +379,8 @@ def split_data(n_samples, ratios=(0.7, 0.15, 0.15), seed=42):
 
     return idx_tr, idx_va, idx_te
 
-#Metrics
+
+# Metrics
 def confusion_counts(y_true: np.ndarray, y_pred: np.ndarray):
     y_true = y_true.astype(np.int64).reshape(-1)
     y_pred = y_pred.astype(np.int64).reshape(-1)
@@ -321,59 +400,23 @@ def basic_metrics(y_true: np.ndarray, y_pred: np.ndarray):
     return {"precision": p, "recall": r, "f1": f1, "accuracy": acc, "TP": tp, "TN": tn, "FP": fp, "FN": fn}
 
 
-"""
-my hand coded ......
-def roc_curve_manual(y_true: np.ndarray, y_scores: np.ndarray, n_thresholds: int = 101):
-    y_true = y_true.astype(np.int64).reshape(-1)
-    y_scores = y_scores.reshape(-1)
-    thresholds = np.linspace(0.0, 1.0, n_thresholds)
-    tpr = np.zeros_like(thresholds, dtype=np.float64)
-    fpr = np.zeros_like(thresholds, dtype=np.float64)
-    P = max(1, int(np.sum(y_true == 1)))
-    N = max(1, int(np.sum(y_true == 0)))
-    for i, thr in enumerate(thresholds):
-        y_pred = (y_scores >= thr).astype(np.int64)
-        tp = int(np.sum((y_true == 1) & (y_pred == 1)))
-        fp = int(np.sum((y_true == 0) & (y_pred == 1)))
-        tpr[i] = tp / P
-        fpr[i] = fp / N
-    order = np.argsort(fpr)
-    return fpr[order], tpr[order], thresholds[order]
-
-
-def auc_trapezoid(x: np.ndarray, y: np.ndarray) -> float:
-    x = x.astype(np.float64);
-    y = y.astype(np.float64)
-    area = 0.0
-    for i in range(1, len(x)):
-        dx = x[i] - x[i - 1]
-        area += dx * (y[i] + y[i - 1]) / 2.0
-    return float(area)
-"""
-
 def build_dataloaders(cfg):
-    """Build dataloaders matching UNet's structure, memory-safe."""
+    """Build dataloaders with FIXED samplers."""
     d = cfg["data"]
     sig = cfg.get("signal", {})
     bs = int(d.get("batch_size", cfg["trainer"]["batch_size"]))
     nw = int(d.get("num_workers", cfg["trainer"]["num_workers"]))
-    seed = int(cfg.get("seed", 42))
+    seed = int(cfg.get("project", {}).get("seed", 42))
 
     # 1) Prefer NPY
     x_npy, y_npy = d.get("x_npy"), d.get("y_npy")
     if x_npy and y_npy and os.path.exists(x_npy) and os.path.exists(y_npy):
-        # memmap load: stays on disk
         X = np.load(x_npy, mmap_mode="r")
         y = np.load(y_npy, mmap_mode="r")
-
-        # ---- select only the 19 EEG channels we care about ----
-        # indices based on processed_data/metadata.json channel order
         channel_indices = [7, 8, 27, 28, 17, 18, 15, 13, 19, 14, 16,
                            44, 45, 46, 47, 30, 35, 31, 29]
-        #X = X[:, channel_indices, :]   # shape: (N, 19, 400)
-
     else:
-        # 2) RAW fallback: use FIRST EDF in dir (small experiments only)
+        # 2) RAW fallback
         edf_dir = d["edf"]["dir"]
         edfs = sorted([f for f in os.listdir(edf_dir)
                        if f.lower().endswith(".edf")])
@@ -382,13 +425,13 @@ def build_dataloaders(cfg):
         X, y = load_edf_windows(os.path.join(edf_dir, edfs[0]),
                                 d["edf"]["labels_json"], d)
         channel_indices = None
-    # number of windows
+
     n_samples = X.shape[0]
 
-    # split into train / val / test using indices only
+    # Split
     idx_tr, idx_va, idx_te = split_data(n_samples, seed=seed)
 
-    # build datasets WITHOUT copying full arrays
+    # Build datasets
     ds_tr = EEGDataset(X, y, idx_tr,
                        normalize=sig.get("normalize", "zscore"),
                        reference=sig.get("reference", "car"),
@@ -402,18 +445,21 @@ def build_dataloaders(cfg):
                        reference=sig.get("reference", "car"),
                        channel_indices=channel_indices)
 
-    # sampler options – for safety, only "normal" is supported here
+    # FIXED SAMPLER LOGIC
     sampler_mode = cfg["trainer"].get("sampler", "normal").lower()
-    if sampler_mode != "normal":
-        print(f"[WARN] sampler='{sampler_mode}' not supported with memmap yet; "
-              "falling back to normal shuffle.")
-        sampler_mode = "normal"
 
-    if sampler_mode == "normal":
-        train_loader = DataLoader(ds_tr, batch_size=bs, shuffle=True,
+    if sampler_mode == "undersample":
+        print(f"[DataLoader] Using UndersamplingSampler")
+        sampler = UndersamplingSampler(y, idx_tr, target_ratio=1.0, seed=seed)
+        train_loader = DataLoader(ds_tr, batch_size=bs, sampler=sampler,
                                   num_workers=nw, pin_memory=True)
-    else:
-        # (we never actually reach here; just in case)
+    elif sampler_mode == "weighted":
+        print(f"[DataLoader] Using WeightedRandomSampler")
+        sampler = build_weighted_sampler(y, idx_tr, seed=seed)
+        train_loader = DataLoader(ds_tr, batch_size=bs, sampler=sampler,
+                                  num_workers=nw, pin_memory=True)
+    else:  # normal
+        print(f"[DataLoader] Using normal shuffle")
         train_loader = DataLoader(ds_tr, batch_size=bs, shuffle=True,
                                   num_workers=nw, pin_memory=True)
 
@@ -433,8 +479,8 @@ class TrainState:
     epoch: int = 0
 
 
-def run_eval(dloader, cfg, model, device, split_name="val"):
-    """evaluating only using sklearn------ commented part are manual one """
+def run_eval(dloader, cfg, model, device, split_name="val", fixed_thr=None):
+    """evaluating only using sklearn"""
     model.eval()
     all_probs = []
     all_y = []
@@ -443,71 +489,48 @@ def run_eval(dloader, cfg, model, device, split_name="val"):
         for x, y in dloader:
             x = x.to(device)
             y = y.to(device)
-            logits = model(x)  # [B, T] - sample-level
+            logits = model(x)
             probs = torch.sigmoid(logits)
             all_y.append(y.detach().cpu())
             all_probs.append(probs.detach().cpu())
 
-    probs = torch.cat(all_probs, dim=0).numpy()  # [N, T]
+    probs = torch.cat(all_probs, dim=0).numpy()
     y_true = torch.cat(all_y, dim=0).numpy()
 
     y_true_flat = y_true.reshape(-1)
     y_score_flat = probs.reshape(-1)
 
-    """
-    --------------------------this i s manual (commented out, using sklearn now) 
-    # Threshold sweep (matching UNet)
-    evcfg = cfg.get("eval", {})
-    n_th = int(evcfg.get("n_thresholds", 101))
-    metric = evcfg.get("metric_for_best", "f1")
-    best_thr, best_m, best_score = 0.5, None, -1.0
-
-    for thr in np.linspace(0.0, 1.0, n_th):
-        preds = (probs >= thr).astype(np.int64)
-        mm = basic_metrics(y_true, preds)
-        score = mm.get(metric, mm["f1"])
-        if score > best_score:
-            best_thr, best_m, best_score = float(thr), mm, float(score)
-
-    metrics = best_m
-    metrics["threshold"] = best_thr
-
-    # ROC/AUC
-    fpr, tpr, _ = roc_curve_manual(y_true_flat, y_score_flat, n_thresholds=n_th)
-    roc_auc = auc_trapezoid(fpr, tpr)
-    metrics["roc_auc"] = roc_auc
-
-    # PR-AUC (Average Precision)
-    try:
-        pr_auc = float(average_precision_score(y_true_flat, y_score_flat))
-        metrics["pr_auc"] = pr_auc
-    except Exception:
-        pr_auc = None
-    """
-
-    # using sklearn
-    # Find best threshold via sklearn PR curve
+    # Optional probability smoothing
     evcfg = cfg.get("eval", {})
     metric = evcfg.get("metric_for_best", "f1")
+
+    smooth_sec = float(evcfg.get("smooth_sec", 0.0) or 0.0)
+    if smooth_sec > 0:
+        k = max(1, int(round(smooth_sec * cfg["data"].get("sfreq", 200))))
+        if k > 1:
+            kernel = np.ones(k, dtype=np.float32) / float(k)
+            probs_sm = np.empty_like(probs, dtype=np.float32)
+            for i in range(probs.shape[0]):
+                probs_sm[i] = np.convolve(probs[i], kernel, mode="same")
+            probs = probs_sm
+        y_score_flat = probs.reshape(-1)
 
     if not _HAS_SKLEARN:
         print("Warning: sklearn not available, using default threshold 0.5")
         best_thr = 0.5
     else:
+        if fixed_thr is not None:
+            best_thr = float(fixed_thr)
+        else:
+            precision, recall, thresholds = precision_recall_curve(y_true_flat, y_score_flat)
+            f1_scores = (2 * precision[:-1] * recall[:-1]) / (precision[:-1] + recall[:-1] + 1e-8)
+            best_idx = int(np.argmax(f1_scores)) if len(f1_scores) else 0
+            best_thr = float(thresholds[best_idx]) if len(thresholds) else 0.5
 
-        precision, recall, thresholds = precision_recall_curve(y_true_flat, y_score_flat)
-        # Calculate F1 at each threshold
-
-        f1_scores = 2 * (precision[:-1] * recall[:-1]) / (precision[:-1] + recall[:-1] + 1e-8)
-        best_idx = np.argmax(f1_scores)
-        best_thr = float(thresholds[best_idx])
-
-    # Get metrics at best threshold
     preds = (probs >= best_thr).astype(np.int64)
     best_m = basic_metrics(y_true, preds)
     best_m["threshold"] = best_thr
 
-    # Compute AUC metrics using sklearn
     if _HAS_SKLEARN:
         try:
             best_m["roc_auc"] = float(roc_auc_score(y_true_flat, y_score_flat))
@@ -520,7 +543,7 @@ def run_eval(dloader, cfg, model, device, split_name="val"):
         best_m["roc_auc"] = 0.0
         best_m["pr_auc"] = 0.0
 
-    # Plot sklearn-based PR curve
+    # Plot PR curve
     if plt is not None and wandb.run is not None and _HAS_SKLEARN:
         try:
             prec, rec, _ = precision_recall_curve(y_true_flat, y_score_flat)
@@ -540,7 +563,7 @@ def run_eval(dloader, cfg, model, device, split_name="val"):
         except Exception as e:
             print(f"Warning: Could not plot PR curve: {e}")
 
-    # Plot sklearn-based ROC curve
+    # Plot ROC curve
     if plt is not None and wandb.run is not None and _HAS_SKLEARN:
         try:
             from sklearn.metrics import roc_curve
@@ -560,11 +583,10 @@ def run_eval(dloader, cfg, model, device, split_name="val"):
         except Exception as e:
             print(f"Warning: Could not plot ROC curve: {e}")
 
-    # Plot confusion matrix using sklearn's confusion_matrix
+    # Plot confusion matrix
     if plt is not None and wandb.run is not None and _HAS_SKLEARN:
         try:
             from sklearn.metrics import confusion_matrix
-            # Get predictions at best threshold
             y_pred_flat = (y_score_flat >= best_thr).astype(np.int64)
             cm = confusion_matrix(y_true_flat, y_pred_flat)
 
@@ -595,7 +617,7 @@ def run_eval(dloader, cfg, model, device, split_name="val"):
         except Exception as e:
             print(f"Warning: Could not plot confusion matrix: {e}")
 
-    # Loging  metrics table to wandb
+    # Log metrics to wandb
     if wandb.run is not None:
         prevalence = float(y_true_flat.mean())
         wandb.log({
@@ -632,8 +654,7 @@ def train_and_eval(cfg):
             config=cfg
         )
 
-        # Log sampler type at start .....hyper paarametwer logging
-
+        # Log sampler type at start
         wandb.config.update({
             "sampler": cfg["trainer"].get("sampler", "normal"),
             "loss_name": cfg["loss"].get("name"),
@@ -659,7 +680,7 @@ def train_and_eval(cfg):
     opt = torch.optim.AdamW(model.parameters(), lr=cfg["trainer"]["lr"], weight_decay=cfg["trainer"]["weight_decay"])
     scaler = torch.amp.GradScaler("cuda", enabled=(device.type == "cuda") and bool(cfg["trainer"]["amp"]))
 
-    # Loss from losses.py --------tuples for losss # error
+    # Loss
     criterion = build_loss_function(cfg["loss"].get("name", "weighted_bce"), cfg["loss"], dl_tr)
     print(f"[loss] Using {cfg['loss'].get('name', 'weighted_bce')} from losses.py")
 
@@ -672,9 +693,9 @@ def train_and_eval(cfg):
         state.epoch = epoch
         for x, y in dl_tr:
             x = x.to(device)
-            y = y.to(device)  # [B, T]
+            y = y.to(device)
 
-            logits = model(x)  # [B, T] - sample-level!
+            logits = model(x)
 
             opt.zero_grad(set_to_none=True)
             with torch.amp.autocast("cuda", enabled=scaler.is_enabled()):
@@ -716,7 +737,8 @@ def train_and_eval(cfg):
         current_key = m.get('f1', 0.0)
         if current_key > state.best:
             state.best = current_key
-            torch.save({"model": model.state_dict(), "cfg": cfg}, ckpt_path)
+            torch.save({"model": model.state_dict(), "cfg": cfg, "best_val_thr": float(m.get("threshold", 0.5)),
+                        "best_val_epoch": int(epoch)}, ckpt_path)
             print(f"[ckpt] saved best to {ckpt_path} (F1={current_key:.3f})")
             if wandb.run is not None:
                 best_art = wandb.Artifact(name=f"{cfg['project']['name']}-best", type="model",
@@ -729,7 +751,10 @@ def train_and_eval(cfg):
         if os.path.exists(ckpt_path):
             ckpt = torch.load(ckpt_path, map_location=device)
             model.load_state_dict(ckpt["model"])
-        _, _, m = run_eval(dl_te, cfg, model, device, split_name="test")
+            best_val_thr = float(ckpt.get("best_val_thr", 0.5))
+        else:
+            best_val_thr = 0.5
+        _, _, m = run_eval(dl_te, cfg, model, device, split_name="test", fixed_thr=best_val_thr)
         test_payload = {
             "test/threshold": m.get("threshold"),
             "test/precision": m.get("precision"),

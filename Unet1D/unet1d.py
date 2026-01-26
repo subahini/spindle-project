@@ -163,14 +163,19 @@ def load_edf_windows(edf_path, json_path, cfg):
     y = np.stack(Ys, 0)  # [N,Tw]
     return X, y
 
+def split_data(X, y, ratios=(0.7, 0.15, 0.15), gap=5):
+    # gap = number of windows to skip between splits
+    n = len(X)
+    n1 = int(ratios[0] * n)
+    n2 = int((ratios[0] + ratios[1]) * n)
 
-def split_data(X, y, ratios=(0.7, 0.15, 0.15), seed=42):
-    rng = np.random.default_rng(seed)
-    idx = np.arange(len(X));
-    rng.shuffle(idx)
-    n1 = int(ratios[0] * len(X));
-    n2 = int((ratios[0] + ratios[1]) * len(X))
-    return (X[idx[:n1]], y[idx[:n1]]), (X[idx[n1:n2]], y[idx[n1:n2]]), (X[idx[n2:]], y[idx[n2:]])
+    tr_end = max(0, n1 - gap)
+    va_start = min(n, n1 + gap)
+    va_end = max(va_start, n2 - gap)
+    te_start = min(n, n2 + gap)
+
+    return (X[:tr_end], y[:tr_end]), (X[va_start:va_end], y[va_start:va_end]), (X[te_start:], y[te_start:])
+
 
 
 def create_loaders(X, y, batch, workers, sampler_type="normal", seed=42):
