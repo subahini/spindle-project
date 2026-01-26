@@ -1,0 +1,167 @@
+project:
+  name: crnn_spindles
+  seed: 42
+  device: cuda
+  entity: "subahininadarajh-basel-university"
+
+data:
+  sfreq: 200.0
+  window_sec: 5.0
+  step_sec: 1.0
+  batch_size: 8
+  num_workers: 0
+  channels: ["C3", "C4", "O1", "O2", "Fp1", "Fp2", "F7", "F3", "Fz", "F4", "F8",
+             "T3", "T4", "T5", "T6", "P3", "Pz", "P4", "Oz"]
+  filter:
+    low: 1.0
+    high: 30.0
+
+  splits:
+    train:
+      edf_dir: "../data/train/edf"
+      json_dir: "../data/train/json"
+    val:
+      edf_dir: "../data/val/edf"
+      json_dir: "../data/val/json"
+    test:
+      edf_dir: "../data/test/edf"
+      json_dir: "../data/test/json"
+
+  cache:
+      dir: "/tmp/subahini.nadarajh/crnn_cache"   # where memmaps go
+      rebuild: true            # set true once to regenerate
+
+
+
+
+  #edf:
+     #dir: "../data/edf"
+     #labels_json: "../data/labels/sleep_block_spindle_output_P002_1.json"
+ # x_npy: #"../data/processed_data/X_all.npy"
+ # y_npy: #"../data/processed_data/y_all.npy"
+
+paths:
+  out_dir: "./checkpoints"
+
+signal:
+  normalize: zscore
+  reference: car
+  sfreq: 200
+
+spectrogram:
+  n_fft: 128
+  hop_length: 20
+  win_length: 128
+  center: true
+  power: 2.0
+
+model:
+  in_channels: 19
+  base_ch: 32
+  fpn_ch: 64
+  rnn_hidden: 128
+  rnn_layers: 2
+  bidirectional: true
+  use_se: true
+  bias_init_prior: 0.02
+  upsample_mode: linear
+
+trainer:
+  epochs: 70
+  batch_size: 32
+  lr: 0.00021006078389965613
+  weight_decay: 0.01
+  amp: true
+  grad_clip: 1.0
+  num_workers: 0
+  sampler: normal
+loss:
+  name: focal
+  focal:
+    alpha: 0.25
+    gamma: 3
+    label_smoothing: 0.05
+  weighted_bce:
+    pos_weight: 2
+    adaptive: false
+    target_pos_rate: 0.10
+    label_smoothing: 0.03
+
+
+eval:
+  n_thresholds: 101
+  metric_for_best: f1
+
+logging:
+  wandb:
+    enabled: true
+    project: "New_CRNN_full"
+    entity: "subahininadarajh-basel-university"
+    tags: ["CRNN", "fixed-hper"]
+
+log:
+  every_steps: 50
+
+# ============================================================
+# W&B SWEEP CONFIGURATION
+# ============================================================
+sweep:
+  enabled: true
+  method: bayes  # Options: grid, random, bayes
+
+  metric:
+    name: val/f1
+    goal: maximize
+
+  parameters:
+    # Learning rate (log scale)
+    trainer.lr:
+      distribution: log_uniform_values
+      min: 0.00001   # 1e-5
+      max: 0.005     # 5e-3
+
+    # Regularization
+    trainer.weight_decay:
+      values: [0.0, 0.001, 0.01, 0.05]
+
+    # Batch size
+    trainer.batch_size:
+      values: [8, 16, 32]
+
+    # Sampling strategy
+    trainer.sampler:
+      values: ["normal", "undersample", "weighted"]
+
+    # Loss function
+    loss.name:
+      values: ["weighted_bce", "focal", "bce", "dice"]
+
+    # Weighted BCE parameters (only used if loss.name = weighted_bce)
+    loss.weighted_bce.pos_weight:
+      values: [2.0, 3.0, 5.0, "auto"]
+
+    loss.weighted_bce.adaptive:
+      values: [true, false]
+
+    # Focal loss parameters (only used if loss.name = focal)
+    loss.focal.gamma:
+      values: [1.0, 2.0, 3.0]
+
+    loss.focal.alpha:
+      values: [0.1, 0.15, 0.25, 0.5]
+
+    # Architecture - Squeeze-Excitation
+    model.use_se:
+      values: [true, false]
+
+    # Architecture - RNN size
+    model.rnn_hidden:
+      values: [64, 128, 256]
+
+    # Architecture - RNN depth
+    model.rnn_layers:
+      values: [1, 2, 3]
+
+    # Architecture - FPN channels
+    model.fpn_ch:
+      values: [64, 128, 256]
