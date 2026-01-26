@@ -1,0 +1,120 @@
+{
+  "created_at": "2026-01-11T18:30:16.407064",
+  "n_subjects": 3,
+  "subjects": [
+    "P002_1",
+    "P002_2",
+    "P002_3"
+  ],
+  "subject_window_ranges": {
+    "P002_1": {
+      "start_idx": 0,
+      "end_idx": 29805,
+      "n_windows": 29805
+    },
+    "P002_2": {
+      "start_idx": 29805,
+      "end_idx": 60425,
+      "n_windows": 30620
+    },
+    "P002_3": {
+      "start_idx": 60425,
+      "end_idx": 89517,
+      "n_windows": 29092
+    }
+  },
+  "n_total_windows": 89517,
+  "n_channels": 52,
+  "channels": [
+    "A1",
+    "A2",
+    "Abdomen",
+    "Aktivit\u00e4t_DR",
+    "Atemzugsvolumen_",
+    "Bein li",
+    "Bein re",
+    "C3",
+    "C4",
+    "E1",
+    "E2",
+    "EKG",
+    "Erhebung_DR",
+    "F3",
+    "F4",
+    "F7",
+    "F8",
+    "Flow_DR",
+    "Fp1",
+    "Fp2",
+    "Fz",
+    "Gravity X",
+    "Gravity Y",
+    "Herzfrequenz_DR",
+    "Kinn",
+    "Lage_DR",
+    "Licht_BU",
+    "Nasal Pressure",
+    "O1",
+    "O2",
+    "Oz",
+    "P3",
+    "P4",
+    "Phase_DR",
+    "Plethysmogram",
+    "Pulse",
+    "Pz",
+    "RD-Quality",
+    "REF",
+    "RMI_DR",
+    "RR_DR",
+    "Schnarchen_DR",
+    "SpO2",
+    "SpO2 BB",
+    "SpO2-Qualit\u00e4t_DR",
+    "T3",
+    "T4",
+    "T5",
+    "T6",
+    "Thorax",
+    "XFlow_DR",
+    "XSum_DR"
+  ],
+  "processing_config": {
+    "sfreq": 200.0,
+    "low_freq": 5.0,
+    "high_freq": 30.0,
+    "window_sec": 2.0,
+    "step_sec": 1.0
+  },
+  "data_shape": {
+    "X_all": [
+      89517,
+      52,
+      400
+    ],
+    "y_all": [
+      89517,
+      400
+    ]
+  },
+  "subject_stats": {
+    "P002_1": {
+      "n_windows": 29805,
+      "n_channels": 52,
+      "n_spindles": 2983,
+      "spindle_ratio": 0.12436774474937932
+    },
+    "P002_2": {
+      "n_windows": 30620,
+      "n_channels": 52,
+      "n_spindles": 2418,
+      "spindle_ratio": 0.09836631723327129
+    },
+    "P002_3": {
+      "n_windows": 29092,
+      "n_channels": 52,
+      "n_spindles": 3148,
+      "spindle_ratio": 0.13173065685903826
+    }
+  }
+}
