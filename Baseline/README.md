@@ -1,11 +1,11 @@
-# 💤 Baseline Model — Schimicek Spindle Detector
+ # Baseline Model — Schimicek Spindle Detector
 
 This folder contains a **rule-based baseline model** for sleep spindle detection, inspired by the classical method of **Schimicek et al.**  
 It is used as a **non-learning reference** for comparison with deep learning and graph-based models.
 
 ---
 
-## 🔍 Overview
+# Overview
 
 - Operates on **single EEG channels**
 - Fully **deterministic** (no training required)
@@ -14,7 +14,7 @@ It is used as a **non-learning reference** for comparison with deep learning and
 
 ---
 
-## ⚙️ Method Summary
+Method Summary
 
 The detector follows four main steps:
 
@@ -37,7 +37,7 @@ The detector follows four main steps:
 
 ---
 
-## 📁 Files
+##  Files
 
 
 
@@ -52,41 +52,12 @@ schimicek_baseline/
 
 ---
 
-## ▶️ Running the Baseline
-
-```bash
-python all_data.py --config config.yaml --channel C3
+##  Running the Baseline
 
 
-This will:
-
-Process all EDF recordings Match corresponding JSON annotations Report sample-level and event-level metrics
-
-Log results to Weights & Biases (if enabled)
-
-🗂 Data Format
-data/
-  edf/     # EEG recordings (.edf)
-  labels/  # Spindle annotations (.json)
 
 
-Each label file must include:
-
-start, end (seconds)
-
-channel_names (e.g. "C3-Ref")
-
-🔁 Parameter Sweeps (Optional)
-
-Bayesian sweeps are supported via Weights & Biases:
-
-wandb sweep sweep.yaml
-wandb agent <entity>/<project>/<sweep_id>
-
-
-⚠️ For final reporting, tune parameters only on training data.
-
-📚 Reference
+# Reference
 
 Schimicek et al.
 Automatic sleep spindle detection using EEG signal processing techniques.
