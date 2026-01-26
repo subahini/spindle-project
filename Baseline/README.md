@@ -52,8 +52,6 @@ schimicek_baseline/
 
 ---
 
-##  Running the Baseline
-
 
 
 
