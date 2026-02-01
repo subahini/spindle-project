@@ -169,6 +169,149 @@ def build_weighted_sampler(labels, indices, seed=42):
         replacement=True
     )
 
+def build_pos_oversample_sampler(labels, indices, factor=3.0, seed=42):
+    """
+    Train-only oversampling:
+    windows that contain any spindle samples get weight *= factor.
+    Uses WeightedRandomSampler so we don't physically duplicate data.
+    """
+    indices = np.asarray(indices)
+    factor = float(factor)
+    factor = max(1.0, factor)
+
+    # A window is "positive" if it contains any positive samples
+    pos_counts = np.array([labels[i].sum() for i in indices], dtype=np.float32)
+    pos_mask = pos_counts > 0
+
+    n_pos = int(pos_mask.sum())
+    n_neg = int((~pos_mask).sum())
+    print(f"[OversamplePos] Pos windows: {n_pos}, Neg windows: {n_neg}, factor={factor}")
+
+    weights = np.ones(len(indices), dtype=np.float32)
+    if n_pos > 0 and factor > 1.0:
+        weights[pos_mask] *= factor
+
+    # Normalize weights to keep sampler stable
+    weights = weights / (weights.sum() + 1e-8) * len(weights)
+
+    return WeightedRandomSampler(
+        weights=weights.tolist(),
+        num_samples=len(indices),     # keep epoch length same as before
+        replacement=True
+    )
+def _window_is_pos(y_win: np.ndarray) -> bool:
+    # y_win: (T,) sample-level labels for a window
+    return float(np.sum(y_win)) > 0.0
+
+
+def find_temporal_hard_negatives_from_window_labels(win_is_pos: np.ndarray, radius: int = 2) -> np.ndarray:
+    """
+    win_is_pos: (N_windows,) boolean array
+    returns indices of negatives near positive windows (global index-based)
+    NOTE: if your windows are concatenated from multiple EDFs, boundary-crossing is possible.
+          That's usually minor; if you want strict per-file boundaries we can add record_ids to cache.
+    """
+    pos_idx = np.where(win_is_pos)[0]
+    hard = set()
+    for i in pos_idx:
+        for d in range(1, radius + 1):
+            j1 = i - d
+            j2 = i + d
+            if j1 >= 0 and not win_is_pos[j1]:
+                hard.add(j1)
+            if j2 < len(win_is_pos) and not win_is_pos[j2]:
+                hard.add(j2)
+    return np.array(sorted(hard), dtype=np.int64)
+
+
+def compute_sigma_power_for_indices(X_memmap, indices, sfreq: float, fmin: float = 11.0, fmax: float = 16.0,
+                                    max_eval: int = 50000, seed: int = 42) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Computes sigma bandpower proxy for selected windows.
+    Returns (used_indices, sigma_power_per_used_index)
+    sigma_power is mean over channels of mean FFT power within [fmin,fmax].
+    """
+    idx = np.asarray(indices, dtype=np.int64)
+
+    if max_eval and len(idx) > max_eval:
+        rng = np.random.default_rng(seed)
+        idx = rng.choice(idx, size=max_eval, replace=False)
+
+    # FFT bins
+    C = X_memmap.shape[1]
+    T = X_memmap.shape[2]
+    freqs = np.fft.rfftfreq(T, d=1.0 / float(sfreq))
+    band = (freqs >= fmin) & (freqs <= fmax)
+    band_idx = np.where(band)[0]
+    if band_idx.size == 0:
+        raise RuntimeError(f"No FFT bins in sigma band [{fmin},{fmax}] with T={T}, sfreq={sfreq}")
+
+    sigmas = np.zeros(len(idx), dtype=np.float32)
+
+    # Compute per window
+    for k, i in enumerate(idx):
+        x = np.asarray(X_memmap[int(i)], dtype=np.float32)  # (C,T)
+        # rFFT per channel
+        Xf = np.fft.rfft(x, axis=-1)
+        P = (np.abs(Xf) ** 2).astype(np.float32)            # (C, F)
+        sig = P[:, band_idx].mean(axis=1).mean(axis=0)      # mean over band, then channels
+        sigmas[k] = float(sig)
+
+    return idx, sigmas
+
+
+def find_sigma_hard_negatives(X_memmap, y_memmap, indices, sfreq: float,
+                              fmin: float = 11.0, fmax: float = 16.0,
+                              percentile: float = 90.0, max_eval: int = 50000, seed: int = 42) -> np.ndarray:
+    """
+    Hard negatives = windows that are negative but have high sigma power.
+    """
+    idx = np.asarray(indices, dtype=np.int64)
+
+    # window-level positivity
+    win_is_pos = np.array([_window_is_pos(y_memmap[int(i)]) for i in idx], dtype=bool)
+    neg_idx = idx[~win_is_pos]
+    if neg_idx.size == 0:
+        return np.array([], dtype=np.int64)
+
+    used_idx, sigma_vals = compute_sigma_power_for_indices(
+        X_memmap, neg_idx, sfreq=sfreq, fmin=fmin, fmax=fmax, max_eval=max_eval, seed=seed
+    )
+    thr = np.percentile(sigma_vals, float(percentile))
+    hard = used_idx[sigma_vals >= thr]
+    return np.array(sorted(hard), dtype=np.int64)
+
+
+def build_hardneg_sampler(y_memmap, indices, hard_neg_idx,
+                          pos_factor: float = 3.0, hardneg_factor: float = 2.0) -> WeightedRandomSampler:
+    """
+    y_memmap: (N, T)
+    indices: indices for this split
+    hard_neg_idx: subset of indices (global) to upweight
+    """
+    indices = np.asarray(indices, dtype=np.int64)
+
+    win_is_pos = np.array([_window_is_pos(y_memmap[int(i)]) for i in indices], dtype=bool)
+    weights = np.ones(len(indices), dtype=np.float32)
+
+    # positives upweighted
+    weights[win_is_pos] *= float(pos_factor)
+
+    # hard negatives upweighted
+    hard_set = set(int(x) for x in np.asarray(hard_neg_idx, dtype=np.int64).tolist())
+    if hard_set:
+        mask_h = np.array([int(i) in hard_set for i in indices], dtype=bool)
+        weights[mask_h] *= float(hardneg_factor)
+
+    # normalize for stability
+    weights = weights / (weights.sum() + 1e-8) * len(weights)
+
+    n_pos = int(win_is_pos.sum())
+    n_neg = int((~win_is_pos).sum())
+    n_hard = int(sum((int(i) in hard_set) for i in indices))
+    print(f"[HardNegSampler] pos={n_pos} neg={n_neg} hard_neg={n_hard} pos_factor={pos_factor} hardneg_factor={hardneg_factor}")
+
+    return WeightedRandomSampler(weights.tolist(), num_samples=len(indices), replacement=True)
 
 # ----------------- spectrogram & model -----------------
 class Spectrogram(nn.Module):
@@ -518,7 +661,6 @@ def build_or_load_split_memmaps(cfg_data: dict, split_name: str):
     X = np.memmap(paths["x"], mode="r", dtype=np.float32, shape=X_mm.shape)
     y = np.memmap(paths["y"], mode="r", dtype=np.float32, shape=y_mm.shape)
     return X, y
-
 def build_dataloaders(cfg):
     d = cfg["data"]
     sig = cfg.get("signal", {})
@@ -526,12 +668,12 @@ def build_dataloaders(cfg):
     nw = int(d.get("num_workers", cfg["trainer"]["num_workers"]))
     seed = int(cfg.get("project", {}).get("seed", 42))
 
-    # Preferred: cached split memmaps (train/val/test)
+    # cached split memmaps (train/val/test)
     if d.get("splits"):
         X_tr, y_tr = build_or_load_split_memmaps(d, "train")
         X_va, y_va = build_or_load_split_memmaps(d, "val")
         X_te, y_te = build_or_load_split_memmaps(d, "test")
-        channel_indices = None  # keep None unless you truly need custom mapping
+        channel_indices = None
     else:
         raise RuntimeError("Please define cfg.data.splits.{train,val,test} for multi-file training.")
 
@@ -552,22 +694,71 @@ def build_dataloaders(cfg):
                        reference=sig.get("reference", "car"),
                        channel_indices=channel_indices)
 
-    sampler_mode = cfg["trainer"].get("sampler", "normal").lower()
+    sampler_mode = str(cfg["trainer"].get("sampler", "normal")).lower()
+    oversample_factor = float(cfg["trainer"].get("oversample_pos_factor", 1.0))
 
+    # ---- TRAIN LOADER (sampler only here) ----
     if sampler_mode == "undersample":
         sampler = UndersamplingSampler(y_tr, idx_tr, target_ratio=1.0, seed=seed)
         train_loader = DataLoader(ds_tr, batch_size=bs, sampler=sampler, num_workers=nw, pin_memory=False)
+
     elif sampler_mode == "weighted":
         sampler = build_weighted_sampler(y_tr, idx_tr, seed=seed)
         train_loader = DataLoader(ds_tr, batch_size=bs, sampler=sampler, num_workers=nw, pin_memory=False)
+
+    elif sampler_mode in ["oversample_pos", "oversample", "pos_oversample"]:
+        sampler = build_pos_oversample_sampler(y_tr, idx_tr, factor=oversample_factor, seed=seed)
+        train_loader = DataLoader(ds_tr, batch_size=bs, sampler=sampler, num_workers=nw, pin_memory=False)
+
+    elif sampler_mode in ["hardneg", "hard_negative", "hardnegatives"]:
+        hcfg = cfg["trainer"].get("hardneg", {}) or {}
+        pos_factor = float(hcfg.get("pos_factor", 3.0))
+        hardneg_factor = float(hcfg.get("hardneg_factor", 2.0))
+        radius = int(hcfg.get("temporal_radius", 0))
+        sigma_pct = float(hcfg.get("sigma_percentile", 90))
+        sigma_fmin = float(hcfg.get("sigma_fmin", 11.0))
+        sigma_fmax = float(hcfg.get("sigma_fmax", 16.0))
+        max_sigma_eval = int(hcfg.get("max_sigma_eval", 50000))
+        sfreq = float(cfg["data"].get("sfreq", 200))
+
+        # window-level pos array (for temporal neighbors)
+        win_is_pos = np.array([_window_is_pos(y_tr[int(i)]) for i in idx_tr], dtype=bool)
+
+        hard_idx_list = []
+
+        # A) temporal hard negatives (optional)
+        if radius > 0:
+            hard_temporal_local = find_temporal_hard_negatives_from_window_labels(win_is_pos, radius=radius)
+            hard_temporal = idx_tr[hard_temporal_local]
+            hard_idx_list.append(hard_temporal)
+            print(f"[HardNeg] temporal hard neg: {len(hard_temporal)}")
+
+        # B) sigma-high negatives (recommended)
+        if sigma_pct > 0:
+            hard_sigma = find_sigma_hard_negatives(
+                X_tr, y_tr, idx_tr, sfreq=sfreq,
+                fmin=sigma_fmin, fmax=sigma_fmax,
+                percentile=sigma_pct, max_eval=max_sigma_eval, seed=seed
+            )
+            hard_idx_list.append(hard_sigma)
+            print(f"[HardNeg] sigma hard neg: {len(hard_sigma)} (pct={sigma_pct})")
+
+        hard_idx = np.unique(np.concatenate(hard_idx_list)) if hard_idx_list else np.array([], dtype=np.int64)
+
+        sampler = build_hardneg_sampler(
+            y_tr, idx_tr, hard_neg_idx=hard_idx,
+            pos_factor=pos_factor, hardneg_factor=hardneg_factor
+        )
+        train_loader = DataLoader(ds_tr, batch_size=bs, sampler=sampler, num_workers=nw, pin_memory=False)
+
     else:
         train_loader = DataLoader(ds_tr, batch_size=bs, shuffle=True, num_workers=nw, pin_memory=False)
 
+    # ---- VAL/TEST loaders (never sampled) ----
     val_loader = DataLoader(ds_va, batch_size=bs, shuffle=False, num_workers=nw, pin_memory=False)
-    test_loader = DataLoader(ds_te, batch_size=bs, shuffle=False, num_workers=nw, pin_memory=Falsepr)
+    test_loader = DataLoader(ds_te, batch_size=bs, shuffle=False, num_workers=nw, pin_memory=False)
 
     return ds_tr, ds_va, ds_te, train_loader, val_loader, test_loader
-
 
 # ----------------- trainer & eval -----------------
 @dataclass

@@ -74,7 +74,17 @@ trainer:
   amp: true
   grad_clip: 1.0
   num_workers: 0
-  sampler: normal
+  sampler: hardneg
+  hardneg:
+    pos_factor: 3.0
+    hardneg_factor: 2.0
+    temporal_radius: 2          # optional
+    sigma_percentile: 90        # optional
+    sigma_fmin: 11.0
+    sigma_fmax: 16.0
+    max_sigma_eval: 50000       # speed cap; set 0 to evaluate all
+
+
 loss:
   name: focal
   focal:
