@@ -1,0 +1,19 @@
+# this will create .npz file
+
+# if useing singe subject set fold in config to 1 fold :1
+python process_SS3.py
+
+
+Normal run:
+
+
+
+CUDA_VISIBLE_DEVICES=0 python train_timepoint.py -c config.yaml -g 0
+
+
+
+Run W&B Sweep :python sweepTrainer_timepoint.py --create
+
+               copy the id   ----- past the id in sweep_wandb in  config.yaml
+
+                python sweepTrainer_timepoint.py
