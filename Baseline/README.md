@@ -1,4 +1,4 @@
- # Baseline Model — Schimicek Spindle Detector
+ # Baseline Model — Schimicek Spindle  Detector
 
 This folder contains a **rule-based baseline model** for sleep spindle detection, inspired by the classical method of **Schimicek et al.**  
 It is used as a **non-learning reference** for comparison with deep learning and graph-based models.
