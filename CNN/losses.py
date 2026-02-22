@@ -1,4 +1,4 @@
-# losses.py
+# graphs.py
 from typing import Dict, Any, Optional
 import torch
 import torch.nn.functional as F

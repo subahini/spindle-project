@@ -51,6 +51,8 @@ def DE_PSD(data,stft_para):
         Hdata=temp*Hwindow
         FFTdata=fft(Hdata,STFTN)
         magFFTdata=abs(FFTdata[0:int(STFTN/2)])
+        magFFTdata = np.nan_to_num(magFFTdata, nan=0.0, posinf=0.0, neginf=0.0)
+
         for p in range(0,len(fStart)):
             E = 0
             #E_log = 0
@@ -58,8 +60,11 @@ def DE_PSD(data,stft_para):
                 E=E+magFFTdata[p0]*magFFTdata[p0]
             #    E_log = E_log + log2(magFFTdata(p0)*magFFTdata(p0)+1)
             E = E/(fEndNum[p]-fStartNum[p]+1)
+            eps = 1e-12
             psd[j][p] = E
-            de[j][p] = math.log(100*E,2)
+
+            de[j][p] = math.log(100.0 * (E + eps), 2)
+
             #de(j,i,p)=log2((1+E)^4)
     
     return psd,de

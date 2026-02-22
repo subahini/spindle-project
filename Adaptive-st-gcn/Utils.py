@@ -3,10 +3,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 import sklearn.metrics as metrics
 from scipy.sparse.linalg import eigs
-
+import os
+import yaml
+import configparser
 
 # Read configuration file
-
+"""
 def ReadConfig(configfile):
     config = configparser.ConfigParser()
     print('Config: ', configfile)
@@ -14,6 +16,31 @@ def ReadConfig(configfile):
     cfgPath = config['path']
     cfgTrain = config['train']
     cfgModel = config['model']
+    return cfgPath, cfgTrain, cfgModel
+
+"""
+
+
+def ReadConfig(configfile):
+    print('Config: ', configfile)
+
+    ext = os.path.splitext(configfile)[1].lower()
+    if ext in [".yaml", ".yml"]:
+        with open(configfile, "r") as f:
+            cfg = yaml.safe_load(f)
+
+        # return 3 dicts just like before
+        cfgPath = cfg.get("path", {})
+        cfgTrain = cfg.get("train", {})
+        cfgModel = cfg.get("model", {})
+        return cfgPath, cfgTrain, cfgModel
+
+    # fallback: INI/.config  the old one
+    config = configparser.ConfigParser()
+    config.read(configfile)
+    cfgPath = config["path"]
+    cfgTrain = config["train"]
+    cfgModel = config["model"]
     return cfgPath, cfgTrain, cfgModel
 
 
@@ -34,6 +61,74 @@ def AddContext(x, context, label=False, dtype=float):
             for i in range(cut, x[p].shape[0] - cut):
                 tData[i - cut] = x[p][i - cut:i + cut + 1]
             ret.append(tData)
+    return ret
+
+
+# TIME-POINT LEVEL: this is for time point level prediction
+def AddContextLabelSeq(y_list, context, dtype=np.int32, aggregation='center'):
+    """
+    Convert window labels into sequences aligned with AddContext(x, context).
+
+    Supports TWO modes:
+    1. WINDOW-LEVEL: y_list elements are (n_win, 1) or (n_win,)
+    2. TIME-POINT LEVEL: y_list elements are (n_win, samples_per_window)
+
+    For time-point labels, we aggregate using the specified method:
+    - 'center': Use only the center sample of each window (default)
+    - 'mean': Average all samples (gives probability)
+    - 'max': Window is positive if ANY sample is positive
+
+    Input:
+      y_list: list of arrays
+              Window-level: each shape (n_win, 1) or (n_win,)
+              Time-point level: each shape (n_win, samples_per_window)
+      context: odd int (e.g., 5)
+      aggregation: 'center', 'mean', or 'max'
+
+    Output:
+      list of arrays, each shape (n_win - context + 1, context, 1)
+      where y_seq[i] = y[i : i + context] after aggregation
+    """
+    assert context % 2 == 1, "context must be odd"
+    ret = []
+
+    for y in y_list:
+        y = np.asarray(y)
+
+        # Detect if this is time-point level or window level
+        if y.ndim == 2 and y.shape[1] > 1:
+            # TIME-POINT LEVEL: (n_win, samples_per_window)
+            print(f"[INFO] Detected time-point labels: shape {y.shape}, using '{aggregation}' aggregation")
+
+            if aggregation == 'center':
+                # Extract center sample from each window
+                center_idx = y.shape[1] // 2
+                y_agg = y[:, center_idx:center_idx + 1]  # (n_win, 1)
+            elif aggregation == 'mean':
+                # Average across all samples (gives probability for binary labels)
+                y_agg = y.mean(axis=1, keepdims=True).astype(np.float32)
+            elif aggregation == 'max':
+                # Window is positive if ANY sample is positive
+                y_agg = y.max(axis=1, keepdims=True).astype(dtype)
+            else:
+                raise ValueError(f"Invalid aggregation: {aggregation}")
+        else:
+            # WINDOW-LEVEL: (n_win, 1) or (n_win,)
+            print(f"[INFO] Detected window-level labels: shape {y.shape}")
+            if y.ndim == 1:
+                y_agg = y[:, None]  # (n_win, 1)
+            else:
+                y_agg = y  # already (n_win, 1)
+
+        n = y_agg.shape[0]
+        out_n = n - context + 1
+        y_seq = np.zeros((out_n, context, 1), dtype=dtype)
+
+        for i in range(out_n):
+            y_seq[i, :, 0] = y_agg[i:i + context, 0]
+
+        ret.append(y_seq)
+
     return ret
 
 

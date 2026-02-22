@@ -1,4 +1,4 @@
-# all losses.py are same for all model
+# all graphs.py are same for all model
 
 from typing import Dict, Any
 import torch

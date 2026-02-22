@@ -218,7 +218,7 @@ class CRNN2D_BiGRU(nn.Module):
 
 # ----------------- Dataset (this will returns TUPLES) -----------------
 class EEGDataset(Dataset):
-    """ this Dataset  returns (x, y) tuples -------   losses.py"""
+    """ this Dataset  returns (x, y) tuples -------   graphs.py"""
 
     def __init__(self, X, y, normalize="zscore", reference="car"):
         self.X = X.astype(np.float32)
@@ -622,9 +622,9 @@ def train_and_eval(cfg):
     opt = torch.optim.AdamW(model.parameters(), lr=cfg["trainer"]["lr"], weight_decay=cfg["trainer"]["weight_decay"])
     scaler = torch.amp.GradScaler("cuda", enabled=(device.type == "cuda") and bool(cfg["trainer"]["amp"]))
 
-    # Loss from losses.py --------tuples for losss # error
+    # Loss from graphs.py --------tuples for losss # error
     criterion = build_loss_function(cfg["loss"].get("name", "weighted_bce"), cfg["loss"], dl_tr)
-    print(f"[loss] Using {cfg['loss'].get('name', 'weighted_bce')} from losses.py")
+    print(f"[loss] Using {cfg['loss'].get('name', 'weighted_bce')} from graphs.py")
 
     state = TrainState()
     ckpt_path = os.path.join(cfg["paths"]["out_dir"], "best.pt")

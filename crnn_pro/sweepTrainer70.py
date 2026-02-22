@@ -133,7 +133,7 @@ def init_sweep(config_path="config70.yaml", project=None, entity=None):
         "method": sweep_cfg.get("method", "bayes"),
         "metric": sweep_cfg.get("metric", {"name": "val/f1", "goal": "maximize"}),
         "parameters": sweep_cfg.get("parameters", {}),
-        "program": "sweepTrainer.py",
+        "program": "sweepTrainer_timepoint.py",
     }
 
     wb_cfg = cfg.get("logging", {}).get("wandb", {})

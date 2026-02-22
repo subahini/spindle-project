@@ -1,0 +1,61 @@
+path:
+  data: ./data/SS3_DE_19channels.npz
+  cheb:  ./Graph/P002_graphs/adj_DD_knn_k4.mat
+  save: ./result/
+
+train:
+  channels: 19
+  fold: 1
+  context: 5
+  epoch: 50
+  batch_size: 64
+  optimizer: adam
+  learn_rate: 0.001
+  lr_decay: 0.0
+
+  project: spindle-graphsleepsnet
+
+model:
+  adj_matrix: "DD"
+  Globaldense: "16"
+  GLalpha: 0.0001
+  cheb_filters: 10
+  time_filters: 10
+  time_conv_strides: 1
+  time_conv_kernel: 3
+  num_block: 1
+  cheb_k: 3
+  l1: 0
+  l2: 0
+  dropout: 0.5
+
+sweep_wandb:
+
+  id: 84lsxvtx #wbsv5p5j
+              # 0kalyffs   #Learning rate sweep id_first
+
+
+  method: bayes
+  metric:
+    name: fold0/val_pr_auc
+    goal: maximize
+  parameters:
+    #learn_rate:
+     # distribution: log_uniform_values
+      #min: 1e-5
+      #max: 0.003
+      #min: 0.0015
+      #max: 0.006
+#fixed learning rate
+
+    graph_id:
+      values:
+        - DD_dense
+        - DD_knn_k4
+        - DD_knn_k6
+        - DD_knn_k8
+        - DD_topk_k4
+        - DD_topk_k6
+        - DD_topk_k8
+        - identity
+        - random

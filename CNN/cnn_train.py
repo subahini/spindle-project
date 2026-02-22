@@ -4,12 +4,17 @@ import wandb
 import mne
 import numpy as np
 import torch
-import matplotlib.pyplot as plt
-
+import re
 from pathlib import Path
 from torch import optim
 from torch.utils.data import DataLoader, TensorDataset
+from sklearn.model_selection import GroupKFold
 
+from models import SpindleCNN
+from losses import build_loss_function
+
+import argparse
+import matplotlib.pyplot as plt
 from sklearn.metrics import (
     roc_auc_score,
     average_precision_score,
@@ -17,27 +22,56 @@ from sklearn.metrics import (
     roc_curve,
     confusion_matrix,
 )
+# ----------------------------
+# Helpers: pairing + subject id
+# ----------------------------
+def subject_id_from_path(edf_path: str) -> str:
+    return Path(edf_path).stem.split("_")[0]  # P002_3_raw -> P002
 
-from models import SpindleCNN
-from losses import build_loss_function
+
+def build_pairs_from_dirs(edf_dir: str, json_dir: str):
+    edf_dir = Path(edf_dir)
+    json_dir = Path(json_dir)
+
+    edfs = sorted(edf_dir.glob("*.edf"))
+    jsons = sorted(json_dir.glob("*.json"))
+
+    json_map = {}
+    for jp in jsons:
+        m = re.search(r"(P\d+_\d+)", jp.stem)
+        if m:
+            json_map[m.group(1)] = jp
+
+    pairs = []
+    for ep in edfs:
+        m = re.search(r"(P\d+_\d+)", ep.stem)
+        if not m:
+            continue
+        key = m.group(1)
+        if key in json_map:
+            pairs.append((str(ep), str(json_map[key])))
+
+    if not pairs:
+        raise ValueError("No EDF/JSON pairs found in folders.")
+    return pairs
 
 
-# ============================================================
-# JSON LOADER (detected_spindles dict OR list)
-# ============================================================
+def get_pairs_from_config(cfg):
+    sf = cfg["subject_files"]
+    if len(sf) == 1 and "edf_dir" in sf[0] and "json_dir" in sf[0]:
+        return build_pairs_from_dirs(sf[0]["edf_dir"], sf[0]["json_dir"])
+    return [(p["edf"], p["json"]) for p in sf]
 
+
+# ----------------------------
+# JSON spindle loader
+# ----------------------------
 def load_spindles_from_json(json_path: str):
     with open(json_path, "r") as f:
         data = json.load(f)
 
     spindles = data.get("detected_spindles") or data.get("spindles") or []
-
-    if isinstance(spindles, dict):
-        iterable = spindles.values()
-    elif isinstance(spindles, list):
-        iterable = spindles
-    else:
-        iterable = []
+    iterable = spindles.values() if isinstance(spindles, dict) else spindles if isinstance(spindles, list) else []
 
     pairs = []
     for ev in iterable:
@@ -50,10 +84,9 @@ def load_spindles_from_json(json_path: str):
     return pairs
 
 
-# ============================================================
-# EDF -> preprocess -> sample labels -> windows
-# ============================================================
-
+# ----------------------------
+# EDF -> data + sample labels (NO windowing here)
+# ----------------------------
 def preprocess_raw(raw: mne.io.BaseRaw, channels, hp, lp):
     raw.pick(channels)
     raw.set_eeg_reference("average", verbose=False)
@@ -61,31 +94,7 @@ def preprocess_raw(raw: mne.io.BaseRaw, channels, hp, lp):
     return raw.get_data()  # (C, T)
 
 
-def make_windows(data, labels, sfreq, win_s, step_s, overlap_thr):
-    win = int(win_s * sfreq)
-    step = int(step_s * sfreq)
-
-    X_list, y_list = [], []
-    T = data.shape[1]
-
-    for start in range(0, T - win + 1, step):
-        end = start + win
-        seg = data[:, start:end]
-        frac = labels[start:end].mean()
-        y_win = 1.0 if frac >= overlap_thr else 0.0
-
-        X_list.append(seg[None, :, :])  # (1, C, win)
-        y_list.append([y_win])          # (1,)
-
-    X = np.stack(X_list).astype(np.float32)
-    y = np.asarray(y_list, dtype=np.float32)
-
-    # z-score per-window per-channel
-    X = (X - X.mean(axis=-1, keepdims=True)) / (X.std(axis=-1, keepdims=True) + 1e-6)
-    return X, y
-
-
-def load_single_file(edf_path: str, json_path: str, cfg):
+def edf_to_data_and_labels(edf_path: str, json_path: str, cfg):
     raw = mne.io.read_raw_edf(edf_path, preload=True, verbose=False)
     sfreq = float(raw.info["sfreq"])
 
@@ -103,6 +112,52 @@ def load_single_file(edf_path: str, json_path: str, cfg):
         if e > s:
             labels[s:e] = 1.0
 
+    return data.astype(np.float32), labels, sfreq
+
+
+# ----------------------------
+# Split FIRST, then window
+# ----------------------------
+def split_by_time(data, labels, sfreq, train_frac=0.70, val_frac=0.15, test_frac=0.15):
+    assert abs(train_frac + val_frac + test_frac - 1.0) < 1e-6
+
+    T = data.shape[1]
+    t_train = int(T * train_frac)
+    t_val   = int(T * (train_frac + val_frac))
+
+    d_tr, y_tr = data[:, :t_train], labels[:t_train]
+    d_va, y_va = data[:, t_train:t_val], labels[t_train:t_val]
+    d_te, y_te = data[:, t_val:], labels[t_val:]
+
+    return (d_tr, y_tr), (d_va, y_va), (d_te, y_te)
+
+
+def make_windows(data, labels, sfreq, win_s, step_s, overlap_thr):
+    win = int(win_s * sfreq)
+    step = int(step_s * sfreq)
+
+    X_list, y_list = [], []
+    T = data.shape[1]
+
+    for start in range(0, T - win + 1, step):
+        end = start + win
+        seg = data[:, start:end]
+        frac = labels[start:end].mean()
+        y_win = 1.0 if frac >= overlap_thr else 0.0
+
+        X_list.append(seg[None, :, :])  # (1, C, win)
+        y_list.append([y_win])
+
+    X = np.stack(X_list).astype(np.float32)
+    y = np.asarray(y_list, dtype=np.float32)
+
+    # z-score per-window per-channel
+    X = (X - X.mean(axis=-1, keepdims=True)) / (X.std(axis=-1, keepdims=True) + 1e-6)
+    return X, y
+
+
+def windowize_split(split_tuple, sfreq, cfg):
+    data, labels = split_tuple
     return make_windows(
         data, labels, sfreq,
         cfg["windowing"]["window_sec"],
@@ -111,45 +166,143 @@ def load_single_file(edf_path: str, json_path: str, cfg):
     )
 
 
-# ============================================================
-# FILE SPLIT (prevents leakage)
-# ============================================================
+# ----------------------------
+# Case A: ONE SUBJECT (even if multiple EDF segments)
+# Split-by-time after concatenating raw signals (still split before windowing)
+# ----------------------------
+def load_one_subject_concat_raw(pairs, cfg):
+    # pairs are all EDF segments for this subject
+    datas, labels_list = [], []
+    sfreq_ref = None
 
-def build_data_splits_fixed(cfg):
-    pairs = [(p["edf"], p["json"]) for p in cfg["subject_files"]]
-    rng = np.random.RandomState(cfg["splits"]["random_state"])
-    rng.shuffle(pairs)
+    for edf, js in pairs:
+        d, y, sf = edf_to_data_and_labels(edf, js, cfg)
+        if sfreq_ref is None:
+            sfreq_ref = sf
+        elif abs(sf - sfreq_ref) > 1e-6:
+            raise ValueError("Mismatched sampling frequencies across EDF segments.")
+        datas.append(d)
+        labels_list.append(y)
 
-    n = len(pairs)
-    if n < 3:
-        raise ValueError(f"Need at least 3 EDF/JSON pairs for train/val/test, got {n}")
+    data = np.concatenate(datas, axis=1)       # concat in time
+    labels = np.concatenate(labels_list, axis=0)
+    return data, labels, sfreq_ref
 
-    train_pairs = pairs[:-2]
-    val_pairs = pairs[-2:-1]
-    test_pairs = pairs[-1:]
 
-    def load_set(pairs_list, name):
+def build_splits_single_subject(pairs, cfg):
+    # split raw time first, then window
+    data, labels, sfreq = load_one_subject_concat_raw(pairs, cfg)
+
+    train_frac = float(cfg["splits"].get("train_size", 0.70))
+    val_frac   = float(cfg["splits"].get("val_size", 0.15))
+    test_frac  = float(cfg["splits"].get("test_size", 0.15))
+
+    tr, va, te = split_by_time(data, labels, sfreq, train_frac, val_frac, test_frac)
+
+    Xt, yt = windowize_split(tr, sfreq, cfg)
+    Xv, yv = windowize_split(va, sfreq, cfg)
+    Xte, yte = windowize_split(te, sfreq, cfg)
+    return (Xt, yt), (Xv, yv), (Xte, yte)
+
+
+# ----------------------------
+# Case B: MULTI SUBJECT 5-FOLD (GroupKFold) — split by subject FIRST, then window
+# ----------------------------
+def build_splits_subject_kfold(pairs, cfg, fold_idx, n_folds=5):
+    groups = [subject_id_from_path(edf) for edf, _ in pairs]
+    unique_subjects = sorted(set(groups))
+    if len(unique_subjects) < n_folds:
+        raise ValueError(f"Need >= {n_folds} subjects for {n_folds}-fold, got {len(unique_subjects)}")
+
+    gkf = GroupKFold(n_splits=n_folds)
+    splits = list(gkf.split(pairs, groups=groups))
+    train_idx, test_idx = splits[fold_idx]
+
+    train_pairs = [pairs[i] for i in train_idx]
+    test_pairs  = [pairs[i] for i in test_idx]
+
+    # pick ONE validation subject from train subjects
+    rng = np.random.RandomState(int(cfg["splits"].get("random_state", 42)) + fold_idx)
+    train_subjs = sorted(set(subject_id_from_path(edf) for edf, _ in train_pairs))
+    val_subject = rng.choice(train_subjs)
+
+    val_pairs = [p for p in train_pairs if subject_id_from_path(p[0]) == val_subject]
+    train_pairs = [p for p in train_pairs if subject_id_from_path(p[0]) != val_subject]
+
+    def load_and_window_pairs(pairs_list):
         Xs, ys = [], []
         for edf, js in pairs_list:
-            print(f"  {name}: processing {Path(edf).name}")
-            Xi, yi = load_single_file(edf, js, cfg)
-            Xs.append(Xi)
-            ys.append(yi)
-        X = np.concatenate(Xs, axis=0)
-        y = np.concatenate(ys, axis=0)
-        print(f"  {name}: {len(X)} windows, {float(y.mean())*100:.2f}% positive")
-        return X, y
+            d, lab, sfreq = edf_to_data_and_labels(edf, js, cfg)
+            Xi, yi = make_windows(
+                d, lab, sfreq,
+                cfg["windowing"]["window_sec"],
+                cfg["windowing"]["step_sec"],
+                cfg["windowing"]["overlap_threshold"],
+            )
+            Xs.append(Xi); ys.append(yi)
+        return np.concatenate(Xs, 0), np.concatenate(ys, 0)
 
-    print("\n============================================================")
-    print("FILE SPLIT (prevents data leakage):")
-    print(f"  Train: {len(train_pairs)} files")
-    print(f"  Val:   {len(val_pairs)} files")
-    print(f"  Test:  {len(test_pairs)} files")
-    print("============================================================\n")
+    Xt, yt = load_and_window_pairs(train_pairs)
+    Xv, yv = load_and_window_pairs(val_pairs)
+    Xte, yte = load_and_window_pairs(test_pairs)
 
-    return load_set(train_pairs, "TRAIN"), load_set(val_pairs, "VAL"), load_set(test_pairs, "TEST")
+    print(f"[KFold] fold {fold_idx+1}/{n_folds} | val_subject={val_subject} | "
+          f"train_subj={len(set(subject_id_from_path(p[0]) for p in train_pairs))} | "
+          f"test_subj={len(set(subject_id_from_path(p[0]) for p in test_pairs))}")
+
+    return (Xt, yt), (Xv, yv), (Xte, yte)
 
 
+# ----------------------------
+# Dataloaders
+# ----------------------------
+def make_loader(X, y, batch_size, num_workers, shuffle):
+    ds = TensorDataset(torch.from_numpy(X), torch.from_numpy(y))
+    return DataLoader(ds, batch_size=batch_size, shuffle=shuffle,
+                      num_workers=num_workers, pin_memory=True)
+
+
+# ============================================================
+# KEEP your evaluate(), train_one_epoch(), plotting functions here
+# (copy from your current script)
+# ============================================================
+
+
+def print_groupkfold_splits(pairs, n_folds=5, random_state=42):
+    """
+    Print which subjects are used for train / val / test in each fold.
+    """
+
+   # subjects = [get_subject_id(edf) for edf, _ in pairs]
+    subjects = [subject_id_from_path(edf) for edf, _ in pairs]
+    subjects = np.array(subjects)
+
+    unique_subjects = np.unique(subjects)
+    print(f"\nTotal subjects: {len(unique_subjects)}")
+    print("Subjects:", ", ".join(sorted(unique_subjects)))
+
+    gkf = GroupKFold(n_splits=n_folds)
+
+    for fold, (train_idx, test_idx) in enumerate(
+        gkf.split(pairs, groups=subjects), start=1
+    ):
+        train_subjects = sorted(set(subjects[train_idx]))
+        test_subjects = sorted(set(subjects[test_idx]))
+
+        # ---- choose ONE validation subject from train subjects ----
+        rng = np.random.default_rng(random_state + fold)
+        val_subject = rng.choice(train_subjects)
+
+        final_train_subjects = sorted(
+            s for s in train_subjects if s != val_subject
+        )
+
+        print("\n" + "=" * 60)
+        print(f"FOLD {fold}/{n_folds}")
+        print("=" * 60)
+        print(f"TEST subjects ({len(test_subjects)}): {test_subjects}")
+        print(f"VAL  subject (1): [{val_subject}]")
+        print(f"TRAIN subjects ({len(final_train_subjects)}): {final_train_subjects}")
 # ============================================================
 # THRESHOLD (best F1)
 # ============================================================
@@ -310,7 +463,21 @@ def train_one_epoch(model, loader, criterion, optimizer, device):
 # ============================================================
 
 def main():
-    cfg = yaml.safe_load(open("config.yaml", "r"))
+    #cfg = yaml.safe_load(open("config.yaml", "r"))
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", default="config.yaml")
+
+    parser.add_argument("--learning_rate", type=float, default=None)
+    parser.add_argument("--weight_decay", type=float, default=None)
+    parser.add_argument("--batch_size", type=int, default=None)
+    parser.add_argument("--loss_name", type=str, default=None)
+    parser.add_argument("--sampling", type=str, default=None)
+
+    args = parser.parse_args()
+
+    cfg = yaml.safe_load(open(args.config, "r"))
+    #cfg = apply_cli_overrides(cfg, args)
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     wandb_cfg = cfg.get("wandb", {})
@@ -324,7 +491,88 @@ def main():
     else:
         wandb.init(mode="disabled")
 
-    (Xt, yt), (Xv, yv), (Xte, yte) = build_data_splits_fixed(cfg)
+  #  (Xt, yt), (Xv, yv), (Xte, yte) = build_data_splits_fixed(cfg)
+    fold = int(cfg["splits"].get("fold", 1))  # 1..5
+    n_folds = int(cfg["splits"].get("n_folds", 5))
+
+    pairs = get_pairs_from_config(cfg)
+    subjects = {subject_id_from_path(edf) for edf, _ in pairs}
+    if cfg["splits"]["n_folds"] > 1:
+        print_groupkfold_splits(
+            pairs,
+            n_folds=cfg["splits"]["n_folds"],
+            random_state=cfg["splits"].get("random_state", 42),
+        )    # subject print ------ decode k fold
+    # ---- SINGLE SUBJECT or NO CV ----
+    if n_folds <= 1 or len(subjects) == 1:
+        print("Running SINGLE-SUBJECT / NO-CV mode")
+    # single subject -> concatenate raw time, split time, then window
+    data_list, lab_list = [], []
+    sfreq_ref = None
+    for edf, js in pairs:
+        d, lab, sf = edf_to_data_and_labels(edf, js, cfg)
+        if sfreq_ref is None:
+            sfreq_ref = sf
+        data_list.append(d)
+        lab_list.append(lab)
+
+    data = np.concatenate(data_list, axis=1)
+    labels = np.concatenate(lab_list, axis=0)
+
+    train_frac = float(cfg["splits"].get("train_size", 0.70))
+    val_frac = float(cfg["splits"].get("val_size", 0.15))
+    test_frac = float(cfg["splits"].get("test_size", 0.15))
+
+    (tr_d, tr_y), (va_d, va_y), (te_d, te_y) = split_by_time(data, labels, sfreq_ref, train_frac, val_frac, test_frac)
+
+    Xt, yt = make_windows(tr_d, tr_y, sfreq_ref, cfg["windowing"]["window_sec"], cfg["windowing"]["step_sec"],
+                          cfg["windowing"]["overlap_threshold"])
+    Xv, yv = make_windows(va_d, va_y, sfreq_ref, cfg["windowing"]["window_sec"], cfg["windowing"]["step_sec"],
+                          cfg["windowing"]["overlap_threshold"])
+    Xte, yte = make_windows(te_d, te_y, sfreq_ref, cfg["windowing"]["window_sec"], cfg["windowing"]["step_sec"],
+                            cfg["windowing"]["overlap_threshold"])
+    # ---- SINGLE SUBJECT or NO CV ----
+    if n_folds <= 1 or len(subjects) == 1:
+        print("Running SINGLE-SUBJECT / NO-CV mode")
+
+        data_list, lab_list = [], []
+        sfreq_ref = None
+        for edf, js in pairs:
+            d, lab, sf = edf_to_data_and_labels(edf, js, cfg)
+            if sfreq_ref is None:
+                sfreq_ref = sf
+            data_list.append(d)
+            lab_list.append(lab)
+
+        data = np.concatenate(data_list, axis=1)
+        labels = np.concatenate(lab_list, axis=0)
+
+        train_frac = float(cfg["splits"].get("train_size", 0.70))
+        val_frac = float(cfg["splits"].get("val_size", 0.15))
+        test_frac = float(cfg["splits"].get("test_size", 0.15))
+
+        (tr_d, tr_y), (va_d, va_y), (te_d, te_y) = split_by_time(
+            data, labels, sfreq_ref, train_frac, val_frac, test_frac
+        )
+
+        Xt, yt = make_windows(tr_d, tr_y, sfreq_ref,
+                              cfg["windowing"]["window_sec"],
+                              cfg["windowing"]["step_sec"],
+                              cfg["windowing"]["overlap_threshold"])
+        Xv, yv = make_windows(va_d, va_y, sfreq_ref,
+                              cfg["windowing"]["window_sec"],
+                              cfg["windowing"]["step_sec"],
+                              cfg["windowing"]["overlap_threshold"])
+        Xte, yte = make_windows(te_d, te_y, sfreq_ref,
+                                cfg["windowing"]["window_sec"],
+                                cfg["windowing"]["step_sec"],
+                                cfg["windowing"]["overlap_threshold"])
+    # ---- MULTI-SUBJECT CV ----
+    else:
+        print(f"Running {n_folds}-FOLD SUBJECT-WISE CV (fold {fold})")
+        (Xt, yt), (Xv, yv), (Xte, yte) = build_splits_subject_kfold(
+            pairs, cfg, fold_idx=fold - 1, n_folds=n_folds
+        )
 
     def make_loader(X, y, shuffle):
         ds = TensorDataset(torch.from_numpy(X), torch.from_numpy(y))
@@ -418,6 +666,24 @@ def main():
 
     wandb.finish()
 
+    out_dir = Path("CNN_kGroup_results")
+    out_dir.mkdir(exist_ok=True)
+
+    result = {
+        "fold": fold,
+        "f1": test["f1"],
+        "roc_auc": test["roc_auc"],
+        "pr_auc": test["pr_auc"],
+    }
+
+    with open(out_dir / f"fold_{fold}.json", "w") as f:
+        json.dump(result, f, indent=2)
+    print(
+        "RUN CONFIG → "
+        f"LR={cfg['training']['learning_rate']} | "
+        f"BS={cfg['training']['batch_size']} | "
+        f"LOSS={cfg['loss']['name']}"
+    )    #sweep check
 
 if __name__ == "__main__":
     main()

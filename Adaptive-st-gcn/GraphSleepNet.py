@@ -1,12 +1,10 @@
 import numpy as np
-import keras
 import tensorflow as tf
-from keras import backend as K
-from keras import layers
-from keras import regularizers
-from keras import models
-from keras.layers import Layer
-from keras.layers.core import Lambda
+
+from tensorflow import keras
+from tensorflow.keras import backend as K
+from tensorflow.keras import layers, regularizers, models
+from tensorflow.keras.layers import Layer, Lambda
 
 # Model input:  (*, num_of_timesteps, num_of_vertices, num_of_features)
 # 
@@ -220,9 +218,13 @@ class cheb_conv_with_SAt_GL(Layer):
         x,spatial_attention,W=x
         _, num_of_timesteps, num_of_vertices, num_of_features = x.shape
         #Calculating Chebyshev polynomials
-        D = tf.matrix_diag(K.sum(W,axis=1))
+        #D = tf.matrix_diag(K.sum(W,axis=1))
+        D = tf.linalg.diag(K.sum(W, axis=1))
+
         L = D - W
-        lambda_max = K.max(tf.self_adjoint_eigvals(L),axis=1)
+        #lambda_max = K.max(tf.self_adjoint_eigvals(L),axis=1)    tf1 to Tf2 name rename changes
+        lambda_max = K.max(tf.linalg.eigvalsh(L), axis=1)
+
         L_t = (2 * L) / tf.reshape(lambda_max,[-1,1,1]) - [tf.eye(int(num_of_vertices))]
         cheb_polynomials = [tf.eye(int(num_of_vertices)), L_t]
         for i in range(2, self.k):
@@ -232,8 +234,10 @@ class cheb_conv_with_SAt_GL(Layer):
         for time_step in range(num_of_timesteps):
             # shape of x is (batch_size, V, F)
             graph_signal = x[:, time_step, :, :]
-            output = K.zeros(shape = (tf.shape(x)[0], num_of_vertices, self.num_of_filters))
-            
+            B = tf.shape(x)[0]
+            V = tf.shape(x)[2]  # 19
+            output = tf.zeros((B, V, self.num_of_filters), dtype=x.dtype)
+
             for kk in range(self.k):
                 # shape of T_k is (V, V)
                 T_k = cheb_polynomials[kk]
@@ -293,8 +297,10 @@ class cheb_conv_with_SAt_static(Layer):
         for time_step in range(num_of_timesteps):
             # shape is (batch_size, V, F)
             graph_signal = x[:, time_step, :, :]
-            output = K.zeros(shape = (tf.shape(x)[0], num_of_vertices, self.num_of_filters))
-            
+            B = tf.shape(x)[0]
+            V = tf.shape(x)[2]  # 19
+            output = tf.zeros((B, V, self.num_of_filters), dtype=x.dtype)
+
             for kk in range(self.k):
                 # shape of T_k is (V, V)
                 T_k = self.cheb_polynomials[kk]
@@ -331,12 +337,15 @@ def reshape_dot(x):
     )
 
 
-def LayerNorm(x):
-    # do the layer normalization
-    x_residual,time_conv_output=x
-    relu_x=K.relu(x_residual+time_conv_output)
-    ln=tf.contrib.layers.layer_norm(relu_x,begin_norm_axis=3)
-    return ln
+class AddReluLayerNorm(layers.Layer):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.ln = layers.LayerNormalization(axis=-1)
+
+    def call(self, inputs):
+        x_residual, time_conv_output = inputs
+        y = tf.nn.relu(x_residual + time_conv_output)
+        return self.ln(y)
 
 
 def Transpose(x, perm):
@@ -381,8 +390,9 @@ def GraphSleepBlock(x, k, num_of_chev_filters, num_of_time_filters, time_conv_st
     )(x)
     
     # LayerNorm
-    end_output = Lambda(LayerNorm,
-                        name='layer_norm'+str(i))([x_residual,time_conv_output])
+
+    end_output = AddReluLayerNorm(name='layer_norm' + str(i))([x_residual, time_conv_output])
+
     return end_output
 
 
@@ -396,10 +406,13 @@ def build_GraphSleepNet(k, num_of_chev_filters, num_of_time_filters, time_conv_s
     block_out = GraphSleepBlock(data_layer,k, num_of_chev_filters, num_of_time_filters, time_conv_strides, cheb_polynomials, time_conv_kernel,useGL,GLalpha)
     for i in range(1,num_block):
         block_out = GraphSleepBlock(block_out,k,num_of_chev_filters,num_of_time_filters,1,cheb_polynomials,time_conv_kernel,useGL,GLalpha,i)
-        
+    """    
     # Global dense layer
     block_out = layers.Flatten()(block_out)
     for size in dense_size:
+        size = int(float(size))
+        print("DEBUG size:", size, type(size))
+
         block_out=layers.Dense(size)(block_out)
     
     # dropout
@@ -408,7 +421,7 @@ def build_GraphSleepNet(k, num_of_chev_filters, num_of_time_filters, time_conv_s
     
     # softmax classification
     # changing this to spindel classification
-    """softmax = layers.Dense(5,activation='softmax',kernel_regularizer=regularizer)(block_out)
+    softmax = layers.Dense(5,activation='softmax',kernel_regularizer=regularizer)(block_out)
     
     model = models.Model(inputs = data_layer, outputs = softmax)
     
@@ -416,13 +429,45 @@ def build_GraphSleepNet(k, num_of_chev_filters, num_of_time_filters, time_conv_s
         optimizer=opt,
         loss='categorical_crossentropy',
         metrics=['acc'],
-    )"""
+    )
     sigmoid = layers.Dense(1, activation='sigmoid', kernel_regularizer=regularizer)(block_out)
+     
     model = models.Model(inputs=data_layer, outputs=sigmoid)
     model.compile(
         optimizer=opt,
         loss='binary_crossentropy',
         metrics=['acc'])
+                      """  # ---------------- >  this is window level
+
+    # block_out shape: (B, T=context, V=channels, C=num_of_time_filters)
+
+    # compress (V, C) per timestep -> a feature vector per timestep
+    T = block_out.shape[1]  # should be context (static)
+    VC = block_out.shape[2] * block_out.shape[3]
+
+    x = layers.Reshape((T, VC))(block_out)  # (B, T, V*C)
+
+    # optional small per-timestep MLP
+    x = layers.TimeDistributed(layers.Dense(64, activation="relu"))(x)
+    if dropout != 0:
+        x = layers.Dropout(dropout)(x)
+
+    # per-timestep sigmoid output
+    y = layers.TimeDistributed(
+        layers.Dense(1, activation="sigmoid", kernel_regularizer=regularizer)
+    )(x)  # (B, T, 1)
+
+    model = models.Model(inputs=data_layer, outputs=y)
+
+    model.compile(
+        optimizer=opt,
+        loss="binary_crossentropy",
+        metrics=[
+            keras.metrics.BinaryAccuracy(name="acc"),
+            keras.metrics.AUC(curve="ROC", name="auc_roc"),
+            keras.metrics.AUC(curve="PR", name="auc_pr"),
+        ],
+    )
 
     return model
 
@@ -449,5 +494,5 @@ def build_GraphSleepNet_test():
     return model
 
 
-# build_GraphSleepNet_test()
+#build_GraphSleepNet_test()
 
