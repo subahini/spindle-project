@@ -9,7 +9,7 @@ code/model
 code/results
 code/data
 .idea
-P002
+P002/
 
 
 cat > .gitignore << EOF
@@ -37,3 +37,14 @@ cat > .gitignore << EOF
 EOF
 
 .ipynb_checkpoints
+
+models/
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+
+
+wandb/
+results/
+logs/
