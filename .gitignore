@@ -10,7 +10,8 @@ code/results
 code/data
 .idea
 P002/
-
+**/edf/
+*.edf
 
 cat > .gitignore << EOF
 # Python
@@ -43,7 +44,7 @@ checkpoints/
 *.pt
 *.pth
 *.ckpt
-
+*.ipynb
 
 wandb/
 results/
