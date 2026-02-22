@@ -9,8 +9,7 @@ code/model
 code/results
 code/data
 .idea
-
-
+P002
 
 
 cat > .gitignore << EOF
