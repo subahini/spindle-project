@@ -6,7 +6,7 @@ It is used as a **non-learning reference** for comparison with deep learning and
 ---
 
 # Overview
-
+a
 - Operates on **single EEG channels**
 - Fully **deterministic** (no training required)
 - Based on classical EEG **signal-processing rules**
