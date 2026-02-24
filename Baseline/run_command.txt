@@ -1,6 +1,10 @@
+# Run on all 4 channels for one subject/file
+python run_schimicek_all_channels.py --config config.yaml
+
+
 Step 1:
 
-wandb sweep --project spindel_debug --entity subahininadarajh-basel-university sweep.yaml                ----------------# please Copy the sweep ID
+wandb sweep --project Final_baseline_sweep --entity subahininadarajh-basel-university sweep.yaml                ----------------# please Copy the sweep ID
 
 example :
 80wvtkz2 is sweep id (my sweep id...  change it to yours )
@@ -12,3 +16,13 @@ Step 2:
 then run :tmux new -s schimicek_sweep wandb agent subahininadarajh-basel-university/spindel_debug/abc123xy
                                     or
 wandb agent subahininadarajh-basel-university/spindel_debug/abc123xy
+
+
+
+# Run on all channels for all files in a fold
+python run_schimicek_all_channels.py --config config.yaml --fold 1
+
+# Run all 5 folds
+for fold in {1..5}; do
+    python run_schimicek_all_channels.py --config config.yaml --fold $fold
+done

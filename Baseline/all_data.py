@@ -305,7 +305,7 @@ def main(args):
         wandb.log({f"{base}/sample_{k}": v for k, v in rec_sample_metrics.items()})
         wandb.log({f"{base}/event_{k}": v for k, v in rec_event_metrics.items()})
 
-        p2p   = results["peak_to_peak"].astype(float)
+        """p2p   = results["peak_to_peak"].astype(float)
         cand  = results["candidate_mask"].astype(bool)
         final = results["spindle_mask"].astype(bool)
 
@@ -317,7 +317,19 @@ def main(args):
         # build param-dependent scores
         scores = np.zeros_like(base, dtype=float)
         scores[cand] = np.clip(base[cand], 0.0, 2.0)
-        scores[final] = np.clip(base[final] + 0.5, 0.0, 2.5)
+        scores[final] = np.clip(base[final] + 0.5, 0.0, 2.5)""" #---------------metics calulation   correction
+        # Use the confidence scores from the enhanced detector
+        # The detector already returns confidence scores if you're using the _with_confidence version
+        if 'confidence_scores' in results:
+            scores = results['confidence_scores']
+        else:
+            # Fallback to the old method if confidence scores aren't available
+            p2p = results["peak_to_peak"].astype(float)
+            cand = results["candidate_mask"].astype(bool)
+            amp_thr = cfg["schimicek"]["amplitude_threshold_uv"]
+            base = p2p / (amp_thr + 1e-8)
+            scores = np.zeros_like(base, dtype=float)
+            scores[cand] = np.clip(base[cand], 0.0, 2.0)
 
         all_true.append(true_mask.astype(int))
         all_pred.append(results["spindle_mask"].astype(int))
