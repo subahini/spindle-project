@@ -22,8 +22,10 @@ data:
     low: 5.0
     high: 30.0
   edf:
-    dir: "./data/edf"                 # folder with *.edf
-    labels_json: "./data/labels/sleep_block_spindle_output_P002_1.json"
+    dir: "/data/subahini.nadarajh/data/P002/edf"           # folder with *.edf
+    labels_json: "/data/subahini.nadarajh/data/P002/labels"
+
+
 
   x_npy: null
   y_npy: null

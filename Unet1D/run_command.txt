@@ -1,0 +1,20 @@
+
+
+python unet1d.py --config config.yaml
+
+
+# sweep
+wandb sweep --project Unet_sweep --entity your-entity sweep.yaml
+---------------------------------------------------------------------------------
+
+group k fold---5 fold :
+splits:
+  n_folds: 5
+  fold: 1
+  random_state: 42
+
+
+# Run all 5 folds sequentially
+for fold in {1..5}; do
+    python groupkfold.py \
+        --config config.yaml

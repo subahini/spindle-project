@@ -3,17 +3,11 @@
 
 python schimicek_evaluation.py --config config.yaml --mode single --subject P002
 
-Step 1:
+# to run sweep
 
-wandb sweep --project Final_baseline_sweep --entity subahininadarajh-basel-university sweep.yaml                ----------------# please Copy the sweep ID
-wandb agent subahininadarajh-basel-university/Final_baseline_sweep/ip414m4x
+wandb sweep --project Final_baseline_sweep --entity subahininadarajh-basel-university sweep.yaml                ----------------# please Copy the sweep ID                                 or
 
-
-Step 2:
-
-then run :tmux new -s schimicek_sweep wandb agent subahininadarajh-basel-university/spindel_debug/abc123xy
-                                    or
-wandb agent subahininadarajh-basel-university/spindel_debug/abc123xy
+wandb agent subahininadarajh-basel-university/Final_baseline_sweep/3nzenvdc
 
 
 
