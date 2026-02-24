@@ -5,8 +5,8 @@ data_mode: "single_subject_edf"
 
 
 subject_files:
-  - edf_dir: "../data/raw"
-    json_dir: "../data/labels"
+  - edf_dir: "/data/subahini.nadarajh/data/P002/edf"
+    json_dir: "/data/subahini.nadarajh/data/P002/labels"
 
 
 channels:
@@ -60,7 +60,6 @@ training:
 # LOSS FUNCTION (Simplified - pick ONE strategy)
 # ===============================
 loss:
-  name: "weighted_bce"
   name: "weighted_bce"  # Options: weighted_bce, focal, dice, bce
 
   # Weighted BCE settings
@@ -109,5 +108,5 @@ wandb:
 
   run_name: null    # or "cnn_debug" or anything you like
   log_val_plots_every: 1
-  sweep_id:  my4977vn
+  sweep_id:  f5kbswxs
 

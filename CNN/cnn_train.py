@@ -160,7 +160,7 @@ def make_windows(data, labels, sfreq, win_s, step_s, overlap_thr):
     y = np.asarray(y_list, dtype=np.float32)
 
     # z-score per-window per-channel
-    X = (X - X.mean(axis=-1, keepdims=True)) / (X.std(axis=-1, keepdims=True) + 1e-6)
+   # X = (X - X.mean(axis=-1, keepdims=True)) / (X.std(axis=-1, keepdims=True) + 1e-6)
     return X, y
 
 
@@ -516,30 +516,7 @@ def main():
     if n_folds <= 1 or len(subjects) == 1:
         print("Running SINGLE-SUBJECT / NO-CV mode")
     # single subject -> concatenate raw time, split time, then window
-    data_list, lab_list = [], []
-    sfreq_ref = None
-    for edf, js in pairs:
-        d, lab, sf = edf_to_data_and_labels(edf, js, cfg)
-        if sfreq_ref is None:
-            sfreq_ref = sf
-        data_list.append(d)
-        lab_list.append(lab)
 
-    data = np.concatenate(data_list, axis=1)
-    labels = np.concatenate(lab_list, axis=0)
-
-    train_frac = float(cfg["splits"].get("train_size", 0.70))
-    val_frac = float(cfg["splits"].get("val_size", 0.15))
-    test_frac = float(cfg["splits"].get("test_size", 0.15))
-
-    (tr_d, tr_y), (va_d, va_y), (te_d, te_y) = split_by_time(data, labels, sfreq_ref, train_frac, val_frac, test_frac)
-
-    Xt, yt = make_windows(tr_d, tr_y, sfreq_ref, cfg["windowing"]["window_sec"], cfg["windowing"]["step_sec"],
-                          cfg["windowing"]["overlap_threshold"])
-    Xv, yv = make_windows(va_d, va_y, sfreq_ref, cfg["windowing"]["window_sec"], cfg["windowing"]["step_sec"],
-                          cfg["windowing"]["overlap_threshold"])
-    Xte, yte = make_windows(te_d, te_y, sfreq_ref, cfg["windowing"]["window_sec"], cfg["windowing"]["step_sec"],
-                            cfg["windowing"]["overlap_threshold"])
     # ---- SINGLE SUBJECT or NO CV ----
     if n_folds <= 1 or len(subjects) == 1:
         print("Running SINGLE-SUBJECT / NO-CV mode")
