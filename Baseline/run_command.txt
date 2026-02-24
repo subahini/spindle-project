@@ -6,10 +6,7 @@ python schimicek_evaluation.py --config config.yaml --mode single --subject P002
 Step 1:
 
 wandb sweep --project Final_baseline_sweep --entity subahininadarajh-basel-university sweep.yaml                ----------------# please Copy the sweep ID
-
-example :
-80wvtkz2 is sweep id (my sweep id...  change it to yours )
-wandb agent subahininadarajh-basel-university/spindle-project-Baseline/80wvtkz2
+wandb agent subahininadarajh-basel-university/Final_baseline_sweep/ip414m4x
 
 
 Step 2:

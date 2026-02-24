@@ -42,14 +42,13 @@ The detector follows four main steps:
 
 
 schimicek_baseline/
-├── schimicek_spindle.py # Core detection logic
+├── schimicek_spindle.py # Core detection logic  
+├── schimicek_evaluation.py # Main evaluation script (single subject + GroupKFold)
 ├── all_data.py # Execution & evaluation
 ├── config.yaml # Default parameters
 ├── sweep.yaml # W&B parameter sweeps
 ├── run_command.txt
 └── README.md
-
-
 ---
 
 
@@ -59,3 +58,9 @@ schimicek_baseline/
 
 Schimicek et al.
 Automatic sleep spindle detection using EEG signal processing techniques.
+
+
+Schimicek, P., Zeitlhofer, J., Anderer, P., & Saletu, B. (1994). Automatic sleep-spindle detection procedure: Aspects of reliability and validity. *Clinical Electroencephalography*, 25(1), 26-29.
+
+**DOI:** [10.1177/155005949402500108](https://doi.org/10.1177/155005949402500108)  
+**PMID:** [8174288](https://pubmed.ncbi.nlm.nih.gov/8174288/)
