@@ -1,6 +1,7 @@
 # Run on all 4 channels for one subject/file
-python run_schimicek_all_channels.py --config config.yaml
 
+
+python schimicek_evaluation.py --config config.yaml --mode single --subject P002
 
 Step 1:
 
@@ -24,5 +25,5 @@ python run_schimicek_all_channels.py --config config.yaml --fold 1
 
 # Run all 5 folds
 for fold in {1..5}; do
-    python run_schimicek_all_channels.py --config config.yaml --fold $fold
+    python chimicek_evalution.py --config config.yaml --fold $fold
 done
