@@ -22,6 +22,14 @@ from sklearn.metrics import (
     roc_curve,
     confusion_matrix,
 )
+
+
+
+with open("config.yaml") as f:
+    cfg = yaml.safe_load(f)
+
+
+
 # ----------------------------
 # Helpers: pairing + subject id
 # ----------------------------
@@ -433,6 +441,8 @@ def evaluate(model, loader, criterion, device):
         "y_true": y_true_i,
         "y_score": y_score,
         "y_pred": y_pred_i,
+        "precision": float(precision),
+        "recall": float(recall),
     }
 
 
@@ -483,8 +493,7 @@ def main():
     wandb_cfg = cfg.get("wandb", {})
     if wandb_cfg.get("enabled", True):
         wandb.init(
-            project=wandb_cfg.get("project", "spindle_cnn2d"),
-            entity=wandb_cfg.get("entity", None),
+
             name=wandb_cfg.get("run_name", None),
             config=cfg,
         )
@@ -627,6 +636,8 @@ def main():
             "train/loss": train_loss,
             "val/loss": val["loss"],
             "val/f1": val["f1"],
+            "val/recall": val["recall"],
+            "val/precision": val["precision"],
             "val/roc_auc": val["roc_auc"],
             "val/pr_auc": val["pr_auc"],
             "val/threshold": val["threshold"],
@@ -653,6 +664,8 @@ def main():
         "test/loss": test["loss"],
         "test/f1": test["f1"],
         "test/roc_auc": test["roc_auc"],
+        "test/recall": test["recall"],
+        "test/precision": test["precision"],
         "test/pr_auc": test["pr_auc"],
         "test/threshold": test["threshold"],
     }, step=final_step)
@@ -674,6 +687,9 @@ def main():
         "f1": test["f1"],
         "roc_auc": test["roc_auc"],
         "pr_auc": test["pr_auc"],
+        "recall": test["recall"],
+        "precision": test["precision"],
+
     }
 
     with open(out_dir / f"fold_{fold}.json", "w") as f:

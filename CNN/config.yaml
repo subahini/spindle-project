@@ -104,8 +104,10 @@ device:
 # ===============================
 wandb:
   enabled: true
-  project: "spindle_cnn2d"
+  project: "Final_sweep_CNN"
   entity: "subahininadarajh-basel-university"
-  run_name: null
+
   run_name: null    # or "cnn_debug" or anything you like
   log_val_plots_every: 1
+  sweep_id:  my4977vn
+

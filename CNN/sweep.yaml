@@ -1,48 +1,29 @@
-# sweep.yaml - Fixed CNN Hyperparameter Sweep
-
 program: cnn_train.py
-method: bayes
 
+
+command:
+    - ${env}
+    - python
+    - ${program}
+    - --config
+    - config.yaml
+    - ${args}
+
+method: bayes
 metric:
-  name: val/f1
+  name: val_f1
   goal: maximize
 
 parameters:
-  # Loss strategy (pick one approach)
-  loss_name:
-    values: ["weighted_bce", "focal", "bce"]
-
-  # Learning rate
   learning_rate:
     distribution: log_uniform_values
-    min: 0.00001
-    max: 0.001
-
-  # Regularization
+    min: 1e-5
+    max: 3e-3
   weight_decay:
-    values: [0.0, 0.00001, 0.0001, 0.001]
-
-  # Batch size
+    values: [0, 1e-6, 1e-5, 1e-4]
   batch_size:
-    values: [32, 64, 96]
-
-  # Sampling (mostly "none" to avoid conflicts)
+    values: [32, 64, 128]
+  loss_name:
+    values: ["focal", "weighted_bce", "bce"]
   sampling:
-    values: ["none", "none", "none", "weighted_sampler"]
-
-command:
-  - ${env}
-  - python
-  - ${program}
-  - --config
-  - config.yaml
-  - --loss_name
-  - ${loss_name}
-  - --learning_rate
-  - ${learning_rate}
-  - --weight_decay
-  - ${weight_decay}
-  - --batch_size
-  - ${batch_size}
-  - --sampling
-  - ${sampling}
+    values: ["none", "downsample"]
