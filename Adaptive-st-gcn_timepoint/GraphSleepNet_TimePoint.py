@@ -183,3 +183,89 @@ def build_GraphSleepNet_TimePoint(
     
     return model
 
+
+# ============================================================================
+# ALTERNATIVE: Simpler approach - just refine window predictions
+# ============================================================================
+
+def build_GraphSleepNet_WindowRefiner(
+    k, num_of_chev_filters, num_of_time_filters, time_conv_strides,
+    cheb_polynomials, time_conv_kernel, sample_shape, num_block,
+    dense_size, opt, useGL, GLalpha, regularizer, dropout,
+    samples_per_window=400,
+):
+    """
+    Simpler approach: GraphSleepNet predicts window probability,
+    then a small refinement network modulates it based on raw EEG.
+    
+    This is computationally cheaper but less powerful than the full
+    multi-resolution approach above.
+    """
+    
+    context, n_channels, n_bands = sample_shape
+    
+    # DE input
+    de_input = layers.Input(shape=sample_shape, name='DE_Input')
+    
+    # GraphSleepNet blocks
+    x = GraphSleepBlock(
+        de_input, k, num_of_chev_filters, num_of_time_filters,
+        time_conv_strides, cheb_polynomials, time_conv_kernel,
+        useGL, GLalpha, i=0
+    )
+    for i in range(1, num_block):
+        x = GraphSleepBlock(
+            x, k, num_of_chev_filters, num_of_time_filters,
+            1, cheb_polynomials, time_conv_kernel, useGL, GLalpha, i=i
+        )
+    
+    # Flatten and dense
+    x = layers.Reshape((context, -1))(x)
+    x = layers.Dense(64, activation='relu')(x)
+    
+    # Single window probability (center window)
+    window_prob = layers.Dense(1, activation='sigmoid', name='Window_Prob')(
+        x[:, context//2, :]
+    )  # (B, 1)
+    
+    # Raw EEG input for center window
+    raw_input = layers.Input(
+        shape=(samples_per_window, n_channels),
+        name='Raw_Input'
+    )
+    
+    # Light 1D CNN to generate refinement mask
+    r = layers.Conv1D(16, 51, padding='same', activation='relu')(raw_input)
+    r = layers.Conv1D(8, 25, padding='same', activation='relu')(r)
+    refinement_logit = layers.Conv1D(1, 1, padding='same')(r)  # (B, 400, 1)
+    
+    # Combine: base probability * sigmoid(refinement)
+    # This ensures predictions stay close to window-level estimate
+    window_broadcast = layers.Lambda(
+        lambda x: tf.tile(tf.expand_dims(x, 1), [1, samples_per_window, 1])
+    )(window_prob)  # (B, 400, 1)
+    
+    refinement_factor = layers.Activation('sigmoid')(refinement_logit)
+    
+    final_pred = layers.Multiply(name='Final_Predictions')([
+        window_broadcast,
+        refinement_factor
+    ])
+    
+    model = models.Model(
+        inputs=[de_input, raw_input],
+        outputs=final_pred
+    )
+    
+    model.compile(
+        optimizer=opt,
+        loss='binary_crossentropy',
+        metrics=[
+            keras.metrics.BinaryAccuracy(name='acc'),
+            keras.metrics.AUC(curve='PR', name='pr_auc'),
+            keras.metrics.Precision(name='precision'),
+            keras.metrics.Recall(name='recall')
+        ]
+    )
+    
+    return model

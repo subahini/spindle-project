@@ -7,6 +7,7 @@ import os
 import yaml
 import configparser
 
+
 # Read configuration file
 """
 def ReadConfig(configfile):
@@ -19,8 +20,6 @@ def ReadConfig(configfile):
     return cfgPath, cfgTrain, cfgModel
 
 """
-
-
 def ReadConfig(configfile):
     print('Config: ', configfile)
 
@@ -30,7 +29,7 @@ def ReadConfig(configfile):
             cfg = yaml.safe_load(f)
 
         # return 3 dicts just like before
-        cfgPath = cfg.get("path", {})
+        cfgPath  = cfg.get("path", {})
         cfgTrain = cfg.get("train", {})
         cfgModel = cfg.get("model", {})
         return cfgPath, cfgTrain, cfgModel
@@ -42,7 +41,6 @@ def ReadConfig(configfile):
     cfgTrain = config["train"]
     cfgModel = config["model"]
     return cfgPath, cfgTrain, cfgModel
-
 
 # Add context to the origin data and label
 
@@ -63,6 +61,8 @@ def AddContext(x, context, label=False, dtype=float):
             ret.append(tData)
     return ret
 
+
+# this is for time ponit level prediction
 
 # TIME-POINT LEVEL: this is for time point level prediction
 def AddContextLabelSeq(y_list, context, dtype=np.int32, aggregation='center'):

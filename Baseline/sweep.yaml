@@ -4,17 +4,18 @@ metric:
   name: global/event_f1    # this is what you log in all_data.py
   goal: maximize
 
-program: schimicek_evaluation.py
+program: all_data.py
 run_cap: 120
 command:
   - python
   - ${program}
   - --config
-  - config.yaml
+  - config70.yaml
   - ${args}       # change to C4/F3/F4 if you want another channel
 
 parameters:
-
+  channel:
+    values: [ "C3", "C4" ,"F3","F4"]
   schimicek.amplitude_threshold_uv:
     distribution: uniform
     min: 10.0

@@ -4,19 +4,18 @@ import argparse
 import shutil
 import numpy as np
 import matplotlib.pyplot as plt
-
+from sklearn.model_selection import GroupKFold
 import tensorflow as tf
 from tensorflow import keras
-
 import wandb
+import json
 
 from GraphSleepNet import build_GraphSleepNet
-from Utils import ReadConfig, AddContext, scaled_Laplacian, cheb_polynomial ,AddContextLabelSeq
-from DataGenerator import kFoldGenerator
+from Utils import ReadConfig, AddContext, scaled_Laplacian, cheb_polynomial, AddContextLabelSeq
 
 
 # ----------------------------
-# Helpers: metrics + plotting
+# Helper Functions (metrics, plotting)
 # ----------------------------
 def _safe_div(a, b):
     return float(a) / float(b) if b != 0 else 0.0
@@ -40,11 +39,10 @@ def precision_recall_f1(tp, fp, fn):
 
 
 def pick_best_threshold(y_true, y_prob, n_grid=201):
-    # maximize F1 on given set
     y_true = y_true.reshape(-1)
     y_prob = y_prob.reshape(-1)
     best_thr, best_f1 = 0.5, -1.0
-    best_stats = (0, 0, 0, 0)  # tp, fp, fn, tn
+    best_stats = (0, 0, 0, 0)
     for thr in np.linspace(0.0, 1.0, n_grid):
         y_bin = (y_prob >= thr).astype(int)
         tp, fp, fn, tn = compute_confusion(y_true, y_bin)
@@ -57,18 +55,17 @@ def pick_best_threshold(y_true, y_prob, n_grid=201):
 
 
 def plot_confusion(tp, fp, fn, tn, title="Confusion matrix"):
-    cm = np.array([[tn, fp],
-                   [fn, tp]], dtype=int)
+    cm = np.array([[tn, fp], [fn, tp]], dtype=int)
     fig = plt.figure(figsize=(4, 4))
-    plt.imshow(cm, interpolation="nearest")
+    plt.imshow(cm, interpolation="nearest", cmap='Blues')
     plt.title(title)
     plt.colorbar()
-    tick_marks = np.arange(2)
-    plt.xticks(tick_marks, ["0", "1"])
-    plt.yticks(tick_marks, ["0", "1"])
+    plt.xticks([0, 1], ["0", "1"])
+    plt.yticks([0, 1], ["0", "1"])
     for i in range(2):
         for j in range(2):
-            plt.text(j, i, str(cm[i, j]), ha="center", va="center")
+            plt.text(j, i, str(cm[i, j]), ha="center", va="center",
+                     color='white' if cm[i, j] > cm.max() / 2 else 'black')
     plt.ylabel("True")
     plt.xlabel("Pred")
     plt.tight_layout()
@@ -76,9 +73,6 @@ def plot_confusion(tp, fp, fn, tn, title="Confusion matrix"):
 
 
 def plot_roc_pr(y_true, y_prob):
-    """
-    Returns (roc_fig, pr_fig, roc_auc, pr_auc).
-    """
     from sklearn.metrics import roc_curve, auc, precision_recall_curve
     y_true = y_true.reshape(-1)
     y_prob = y_prob.reshape(-1)
@@ -90,38 +84,80 @@ def plot_roc_pr(y_true, y_prob):
     pr_auc = float(auc(rec, prec))
 
     roc_fig = plt.figure(figsize=(5, 4))
-    plt.plot(fpr, tpr)
-    plt.plot([0, 1], [0, 1])
+    plt.plot(fpr, tpr, 'b-', linewidth=2)
+    plt.plot([0, 1], [0, 1], 'r--', linewidth=1)
     plt.xlabel("FPR")
     plt.ylabel("TPR")
     plt.title(f"ROC (AUC={roc_auc:.3f})")
+    plt.grid(alpha=0.3)
     plt.tight_layout()
 
     pr_fig = plt.figure(figsize=(5, 4))
-    plt.plot(rec, prec)
+    plt.plot(rec, prec, 'b-', linewidth=2)
+    baseline = y_true.mean()
+    plt.axhline(y=baseline, color='r', linestyle='--', label=f'Baseline={baseline:.3f}')
     plt.xlabel("Recall")
     plt.ylabel("Precision")
     plt.title(f"PR (AUC={pr_auc:.3f})")
+    plt.legend()
+    plt.grid(alpha=0.3)
     plt.tight_layout()
 
     return roc_fig, pr_fig, roc_auc, pr_auc
 
 
-class WandbEpochEvalLogger(keras.callbacks.Callback):
-    """
-    Logs per-epoch metrics + plots on validation set.
-    """
-    def __init__(self, fold_idx, x_val, y_val, batch_size=128):
+class BestF1Checkpoint(keras.callbacks.Callback):
+    """Save model when best F1 improves on validation set"""
+
+    def __init__(self, fold_name, x_val, y_val, best_path, meta_path, batch_size=128, n_grid=201):
         super().__init__()
-        self.fold_idx = fold_idx
+        self.fold_name = fold_name
+        self.x_val = x_val
+        self.y_val = y_val.reshape(-1)
+        self.best_path = best_path
+        self.meta_path = meta_path
+        self.batch_size = batch_size
+        self.n_grid = n_grid
+        self.best_f1 = -1.0
+        self.best_thr = 0.5
+        self.best_epoch = -1
+
+    def on_epoch_end(self, epoch, logs=None):
+        y_prob = self.model.predict(self.x_val, batch_size=self.batch_size, verbose=0).reshape(-1)
+        thr, f1, _ = pick_best_threshold(self.y_val, y_prob, n_grid=self.n_grid)
+
+        if f1 > self.best_f1:
+            self.best_f1 = float(f1)
+            self.best_thr = float(thr)
+            self.best_epoch = int(epoch + 1)
+            self.model.save_weights(self.best_path)
+
+            with open(self.meta_path, "w") as f:
+                f.write(f"best_val_f1={self.best_f1}\n")
+                f.write(f"best_val_thr={self.best_thr}\n")
+                f.write(f"best_epoch={self.best_epoch}\n")
+
+        wandb.log({
+            "epoch": epoch + 1,
+            f"{self.fold_name}/val_best_f1": float(f1),
+            f"{self.fold_name}/val_best_thr": float(thr),
+        })
+
+
+class WandbEpochLogger(keras.callbacks.Callback):
+    """Log per-epoch metrics and plots"""
+
+    def __init__(self, fold_name, x_val, y_val, batch_size=128):
+        super().__init__()
+        self.fold_name = fold_name
         self.x_val = x_val
         self.y_val = y_val.reshape(-1)
         self.batch_size = batch_size
 
     def on_epoch_end(self, epoch, logs=None):
         logs = logs or {}
-        to_log = {f"fold{self.fold_idx}/" + k: float(v) for k, v in logs.items() if v is not None}
-        to_log["fold"] = self.fold_idx
+        to_log = {f"{self.fold_name}/" + k: float(v) for k, v in logs.items() if v is not None}
+
         y_prob = self.model.predict(self.x_val, batch_size=self.batch_size, verbose=0).reshape(-1)
         thr = 0.5
         y_bin = (y_prob >= thr).astype(int)
@@ -130,170 +166,109 @@ class WandbEpochEvalLogger(keras.callbacks.Callback):
         prec, rec, f1 = precision_recall_f1(tp, fp, fn)
 
         roc_fig, pr_fig, roc_auc, pr_auc = plot_roc_pr(self.y_val, y_prob)
-        cm_fig = plot_confusion(tp, fp, fn, tn, title=f"Fold {self.fold_idx} VAL CM (thr={thr:.2f})")
+        cm_fig = plot_confusion(tp, fp, fn, tn, title=f"{self.fold_name} VAL CM (thr={thr:.2f})")
 
         to_log.update({
-            f"fold{self.fold_idx}/val_thr_fixed": thr,
-            f"fold{self.fold_idx}/val_tp": tp,
-            f"fold{self.fold_idx}/val_fp": fp,
-            f"fold{self.fold_idx}/val_fn": fn,
-            f"fold{self.fold_idx}/val_tn": tn,
-            f"fold{self.fold_idx}/val_precision@0.5": prec,
-            f"fold{self.fold_idx}/val_recall@0.5": rec,
-            f"fold{self.fold_idx}/val_f1@0.5": f1,
-            f"fold{self.fold_idx}/val_roc_auc": roc_auc,
-            f"fold{self.fold_idx}/val_pr_auc": pr_auc,
-            f"fold{self.fold_idx}/val_confusion": wandb.Image(cm_fig),
-            f"fold{self.fold_idx}/val_roc_curve": wandb.Image(roc_fig),
-            f"fold{self.fold_idx}/val_pr_curve": wandb.Image(pr_fig),
+            f"{self.fold_name}/val_thr_fixed": thr,
+            f"{self.fold_name}/val_tp": tp,
+            f"{self.fold_name}/val_fp": fp,
+            f"{self.fold_name}/val_fn": fn,
+            f"{self.fold_name}/val_tn": tn,
+            f"{self.fold_name}/val_precision": prec,
+            f"{self.fold_name}/val_recall": rec,
+            f"{self.fold_name}/val_f1": f1,
+            f"{self.fold_name}/val_roc_auc": roc_auc,
+            f"{self.fold_name}/val_pr_auc": pr_auc,
+            f"{self.fold_name}/val_confusion": wandb.Image(cm_fig),
+            f"{self.fold_name}/val_roc_curve": wandb.Image(roc_fig),
+            f"{self.fold_name}/val_pr_curve": wandb.Image(pr_fig),
         })
 
         plt.close(cm_fig)
         plt.close(roc_fig)
         plt.close(pr_fig)
-        to_log["fold"] = self.fold_idx
+
         to_log["epoch"] = epoch + 1
         wandb.log(to_log)
 
 
-def split_train_val(x, y, val_frac=0.1, seed=42):
-    """
-    Split train into train/val with stratification.
-    """
+# ----------------------------
+# Split Functions
+# ----------------------------
+def split_time_70_15_15(data, labels):
+    """70-15-15 time-based split for single subject"""
+    n = len(data)
+    n1 = int(0.7 * n)
+    n2 = int(0.85 * n)
+
+    train_data = data[:n1]
+    train_labels = labels[:n1]
+    val_data = data[n1:n2]
+    val_labels = labels[n1:n2]
+    test_data = data[n2:]
+    test_labels = labels[n2:]
+
+    print(f"\n  Split sizes (70-15-15):")
+    print(f"    Train: {len(train_data)} windows ({len(train_data) / n * 100:.1f}%)")
+    print(f"    Val:   {len(val_data)} windows ({len(val_data) / n * 100:.1f}%)")
+    print(f"    Test:  {len(test_data)} windows ({len(test_data) / n * 100:.1f}%)")
+
+    return train_data, train_labels, val_data, val_labels, test_data, test_labels
 
 
-
+def split_train_val(x, y, val_frac=0.15, seed=42):
+    """Split train into train/validation with stratification"""
     from sklearn.model_selection import train_test_split
-    #y = y.reshape(-1)
+
     cut = y.shape[1] // 2
     y_center = y[:, cut, 0].astype(int)
+
     x_tr, x_va, y_tr, y_va = train_test_split(
         x, y, test_size=val_frac, random_state=seed, stratify=y_center
-
-
-
     )
     return x_tr, y_tr, x_va, y_va
-# this function i shelper function to kust use 1 subject
-def split_train_val_test(x, y, val_frac=0.15, test_frac=0.15, seed=42):
-    """
-    Split x,y into train/val/test with stratification based on the CENTER label.
-    x: (N, context, V, F)
-    y: (N, context, 1)
-    """
-    from sklearn.model_selection import train_test_split
-
-    assert 0.0 < val_frac < 1.0
-    assert 0.0 < test_frac < 1.0
-    assert (val_frac + test_frac) < 1.0
-
-    cut = y.shape[1] // 2
-    y_center = y[:, cut, 0].astype(int)
-
-    # 1) split out TEST
-    x_tmp, x_te, y_tmp, y_te, yc_tmp, yc_te = train_test_split(
-        x, y, y_center,
-        test_size=test_frac,
-        random_state=seed,
-        stratify=y_center
-    )
-
-    # 2) split remaining into TRAIN + VAL
-    val_frac2 = val_frac / (1.0 - test_frac)  # re-normalize
-    x_tr, x_va, y_tr, y_va = train_test_split(
-        x_tmp, y_tmp,
-        test_size=val_frac2,
-        random_state=seed + 1,
-        stratify=yc_tmp
-    )
-
-    return x_tr, y_tr, x_va, y_va, x_te, y_te
-
-def disable_xla():
-    # Avoid libdevice / XLA JIT issues on clusters
-    os.environ["TF_XLA_FLAGS"] = "--tf_xla_auto_jit=0"
-    os.environ["XLA_FLAGS"] = "--xla_gpu_cuda_data_dir="
-    tf.config.optimizer.set_jit(False)
-
-class BestF1Checkpoint(keras.callbacks.Callback):
-    """
-    Save model weights when VAL best-F1 improves.
-    Best-F1 is computed by sweeping thresholds on VAL probs.
-    Also saves the best threshold.
-    """
-    def __init__(self, fold_idx, x_val, y_val, best_path, meta_path, batch_size=128, n_grid=201):
-        super().__init__()
-        self.fold_idx = fold_idx
-        self.x_val = x_val
-        self.y_val = y_val.reshape(-1)
-        self.best_path = best_path
-        self.meta_path = meta_path
-        self.batch_size = batch_size
-        self.n_grid = n_grid
-
-        self.best_f1 = -1.0
-        self.best_thr = 0.5
-        self.best_epoch = -1
-
-    def on_epoch_end(self, epoch, logs=None):
-        # 1) predict probs on val
-        y_prob = self.model.predict(self.x_val, batch_size=self.batch_size, verbose=0).reshape(-1)
-
-        # 2) pick best threshold on val (maximize F1)
-        thr, f1, _ = pick_best_threshold(self.y_val, y_prob, n_grid=self.n_grid)
-
-        # 3) if improved, save weights + threshold
-        if f1 > self.best_f1:
-            self.best_f1 = float(f1)
-            self.best_thr = float(thr)
-            self.best_epoch = int(epoch + 1)
-
-            self.model.save_weights(self.best_path)
-
-            # store threshold + f1 so we can freeze it later
-            with open(self.meta_path, "w") as f:
-                f.write(f"best_val_f1={self.best_f1}\n")
-                f.write(f"best_val_thr={self.best_thr}\n")
-                f.write(f"best_epoch={self.best_epoch}\n")
-
-        # (optional) log these per epoch
-        wandb.log({
-            "epoch": epoch + 1,
-
-            f"fold{self.fold_idx}/val_best_f1": float(f1),
-            f"fold{self.fold_idx}/val_best_thr": float(thr),
-        })
 
 
+# ----------------------------
+# Main Function
+# ----------------------------
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("-c", type=str, help="configuration file", required=True)
-    parser.add_argument("-g", type=str, help="GPU number to use, set '-1' to use CPU", required=True)
+    parser.add_argument("-g", type=str, help="GPU number to use", required=True)
+    parser.add_argument("--fold", type=int, default=1,
+                        help="Fold number for GroupKFold (1-5)")
+    parser.add_argument("--n_folds", type=int, default=5,
+                        help="Number of folds for GroupKFold")
+    parser.add_argument("--run_name", type=str, default=None,
+                        help="Custom run name for W&B")
     args = parser.parse_args()
 
+    # Read config
     PathCfg, cfgTrain, cfgModel = ReadConfig(args.c)
 
+    # Set GPU
     os.environ["CUDA_VISIBLE_DEVICES"] = args.g
     if args.g != "-1":
         gpus = tf.config.list_physical_devices("GPU")
         if gpus:
             for gpu in gpus:
                 tf.config.experimental.set_memory_growth(gpu, True)
-        print("Use GPU #" + args.g)
+        print(f"Use GPU #{args.g}")
     else:
         tf.config.set_visible_devices([], "GPU")
         print("Use CPU only")
 
-    disable_xla()
-
+    # Hyperparameters
     channels = int(cfgTrain["channels"])
     context = int(cfgTrain["context"])
     num_epochs = int(cfgTrain["epoch"])
     batch_size = int(cfgTrain["batch_size"])
     optimizer_name = cfgTrain["optimizer"]
     learn_rate = float(cfgTrain["learn_rate"])
-    val_frac = float(cfgTrain.get("val_frac", 0.1))
+    val_frac = float(cfgTrain.get("val_frac", 0.15))
 
+    # Model parameters
     dense_size = np.array(str.split(cfgModel["Globaldense"], ","), dtype=int)
     conf_adj = cfgModel["adj_matrix"]
     GLalpha = float(cfgModel["GLalpha"])
@@ -307,6 +282,7 @@ def main():
     l2 = float(cfgModel["l2"])
     dropout = float(cfgModel["dropout"])
 
+    # Regularizer
     if l1 != 0 and l2 != 0:
         regularizer = keras.regularizers.l1_l2(l1=l1, l2=l2)
     elif l1 != 0:
@@ -316,277 +292,318 @@ def main():
     else:
         regularizer = None
 
+    # Create save directory
     save_dir = PathCfg.get("save", "./result/")
-    PathCfg["save"] = save_dir  # keep rest of code working
-
     os.makedirs(save_dir, exist_ok=True)
+    shutil.copyfile(args.c, os.path.join(save_dir, "last.config"))
 
-    shutil.copyfile(args.c, os.path.join(PathCfg["save"], "last.config"))
-
-    if wandb.run is None:
-        wandb.init(
-            project=cfgTrain.get("project", "spindle-graphsleepsnet"),
-            name=cfgTrain.get("run_name", None),
-            config={"config_file": args.c, "lr": learn_rate, "epochs": num_epochs, "batch": batch_size},
-            settings=wandb.Settings(init_timeout=300),
-        )
-    else:
-        # We are inside a sweep; just update config + extend timeout safety
-        wandb.run.config.update(
-            {"config_file": args.c, "lr": learn_rate, "epochs": num_epochs, "batch": batch_size},
-            allow_val_change=True
-        )
-
-    # ===== Define epoch as global step =====
-    wandb.define_metric("epoch")
-    wandb.define_metric("*", step_metric="epoch")
-    wandb.define_metric("fold")
+    # ========== LOAD DATA ==========
+    print(f"\n{'=' * 60}")
+    print(f"Loading data from: {PathCfg['data']}")
+    print(f"{'=' * 60}")
 
     ReadList = np.load(PathCfg["data"], allow_pickle=True)
-    Fold_Num = ReadList["Fold_Num"]
-    Fold_Data = list(ReadList["Fold_Data"])
-    Fold_Label = list(ReadList["Fold_Label"])
-    fold = len(Fold_Data)
+    Fold_Data = list(ReadList["Fold_Data"])  # List of subjects
+    Fold_Label = list(ReadList["Fold_Label"])  # List of subjects
+    Fold_Num = ReadList["Fold_Num"]  # Windows per subject
+    # ✅ unwrap object containers into real numeric arrays (the real bug fix)
+    Fold_Data = [np.asarray(x, dtype=np.float32) for x in Fold_Data]
+    Fold_Label = [np.asarray(y, dtype=np.int32) for y in Fold_Label]
+    n_subjects = len(Fold_Data)
+    print(f"\nLoaded {n_subjects} subjects")
+    print(f"Windows per subject: {Fold_Num}")
 
-    print("Read data successfully")
-    print(f"Number of folds: {fold}")
-    print(f"Windows per fold: {Fold_Num}")
+    # Add context to each subject's data
+    Fold_Data = AddContext(Fold_Data, context)
 
+    Fold_Label = AddContext(Fold_Label, context, label=True, dtype=np.int32)
+    # ========== DETERMINE MODE ==========
+    if n_subjects == 1:
+        # ===== SINGLE SUBJECT MODE (70-15-15) =====
+        mode = "single"
+        print(f"\n{'=' * 60}")
+        print(f"MODE: SINGLE SUBJECT - 70/15/15 TIME-BASED SPLIT")
+        print(f"{'=' * 60}")
+
+        # Get the single subject's data
+        X_all = Fold_Data[0]
+        y_all = Fold_Label[0]
+
+        # Split 70-15-15
+        X_train, y_train, X_val, y_val, X_test, y_test = split_time_70_15_15(X_all, y_all)
+
+        fold_name = "single"
+
+    else:
+        # ===== MULTI-SUBJECT MODE (5-Fold GroupKFold) =====
+        mode = "groupkfold"
+        n_folds = args.n_folds
+        fold_idx = args.fold - 1  # Convert to 0-based
+
+        print(f"\n{'=' * 60}")
+        print(f"MODE: {n_folds}-FOLD GROUPKFOLD (running fold {args.fold}/{n_folds})")
+        print(f"{'=' * 60}")
+
+        # Create subject IDs for each window
+        subject_ids = []
+        for i, (data, label) in enumerate(zip(Fold_Data, Fold_Label)):
+            assert len(data) == len(label), f"Subject {i}: data and label length mismatch"
+            subject_ids.extend([i] * len(data))
+
+        # Concatenate all data
+        X_all = np.concatenate(Fold_Data, axis=0)
+        y_all = np.concatenate(Fold_Label, axis=0)
+
+        print(f"\nTotal windows: {len(X_all)}")
+        print(f"Total subjects: {n_subjects}")
+
+        # Create GroupKFold splits
+        gkf = GroupKFold(n_splits=n_folds)
+        splits = list(gkf.split(X_all, y_all, groups=subject_ids))
+        train_idx, test_idx = splits[fold_idx]
+
+        # Split into train and test
+        X_train_all = X_all[train_idx]
+        y_train_all = y_all[train_idx]
+        X_test = X_all[test_idx]
+        y_test = y_all[test_idx]
+
+        # Get subject IDs for train set to pick validation subject
+        train_subject_ids = [subject_ids[i] for i in train_idx]
+        unique_train_subjects = sorted(set(train_subject_ids))
+
+        # Randomly pick ONE subject for validation (just like CNN)
+        np.random.seed(42 + fold_idx)
+        val_subject_idx = np.random.choice(unique_train_subjects)
+
+        # Split train into train and validation by subject
+        val_mask = [sid == val_subject_idx for sid in train_subject_ids]
+        train_mask = [not v for v in val_mask]
+
+        X_train = X_train_all[train_mask]
+        y_train = y_train_all[train_mask]
+        X_val = X_train_all[val_mask]
+        y_val = y_train_all[val_mask]
+
+        # Print fold info
+        train_subjects = set([subject_ids[i] for i in train_idx if subject_ids[i] != val_subject_idx])
+        test_subjects = set([subject_ids[i] for i in test_idx])
+
+        print(f"\nFold {args.fold} composition:")
+        print(f"  Train subjects: {len(train_subjects)}")
+        print(f"  Val subject: {val_subject_idx}")
+        print(f"  Test subjects: {len(test_subjects)}")
+        print(f"\n  Train windows: {len(X_train)}")
+        print(f"  Val windows:   {len(X_val)}")
+        print(f"  Test windows:  {len(X_test)}")
+
+        fold_name = f"fold{args.fold}"
+
+    # ========== BUILD GRAPH ==========
     if conf_adj != "GL":
-        import scipy.io as scio
-
-        if conf_adj == "1":
-            adj = np.ones((channels, channels))
-
-        elif conf_adj == "random":
-            adj = np.random.rand(channels, channels)
-
-        # NEW: allow presets like "DD_dense", "DD_knn_k4", ...
-        elif conf_adj.startswith("DD_"):
+        import scipy.io as sio
+        if conf_adj.startswith("DD_"):
             mat_path = os.path.join("graphs", f"adj_{conf_adj}.mat")
             if not os.path.isfile(mat_path):
                 raise FileNotFoundError(f"Graph file not found: {mat_path}")
-            adj = scio.loadmat(mat_path)["adj"]
-
-        # keep old behavior too (if you ever use it)
+            adj = sio.loadmat(mat_path)["adj"]
         elif conf_adj in ("topk", "PLV", "DD"):
-            adj = scio.loadmat(PathCfg["cheb"])["adj"]
-
+            adj = sio.loadmat(PathCfg["cheb"])["adj"]
+        elif conf_adj == "identity":
+            adj = np.eye(channels)
+        elif conf_adj == "random":
+            adj = np.random.rand(channels, channels)
         else:
-            raise ValueError(f"Config: check ADJ (got {conf_adj})")
+            raise ValueError(f"Unknown adj_matrix: {conf_adj}")
 
         L = scaled_Laplacian(adj)
         cheb_polynomials = cheb_polynomial(L, cheb_k)
     else:
         cheb_polynomials = None
 
+    # ========== BUILD MODEL ==========
+    sample_shape = (context, X_train.shape[2], X_train.shape[3])
 
+    keras.backend.clear_session()
+    gc.collect()
 
-    Fold_Data = AddContext(Fold_Data, context)
-  #  Fold_Label = AddContext(Fold_Label, context, label=True)
-    Fold_Label = AddContextLabelSeq(Fold_Label, context)
-    Fold_Num_c = Fold_Num + 1 - context
-
-    print("Context added successfully.")
-    print("Number of samples:", np.sum(Fold_Num_c))
-
-    val_frac = float(cfgTrain.get("val_frac", 0.15))
-    test_frac = float(cfgTrain.get("test_frac", 0.15))
-
-    per_fold = []
-    all_fold_pr_aucs = []
-
-    if fold == 1:
-        print("[INFO] Only 1 fold found -> using train/val/test split (70/15/15).")
-
-        x_all = Fold_Data[0]
-        y_all = Fold_Label[0]
-
-        train_x, train_y, val_x, val_y, test_x, test_y = split_train_val_test(
-            x_all, y_all,
-            val_frac=val_frac,
-            test_frac=test_frac,
-            seed=42
-        )
-
-        fold_indices = [0]
+    if optimizer_name == "adam":
+        opt = keras.optimizers.Adam(learning_rate=learn_rate)
+    elif optimizer_name == "RMSprop":
+        opt = keras.optimizers.RMSprop(learning_rate=learn_rate)
+    elif optimizer_name == "SGD":
+        opt = keras.optimizers.SGD(learning_rate=learn_rate)
     else:
-        DataGen = kFoldGenerator(fold, Fold_Data, Fold_Label)
-        fold_indices = list(range(fold))
+        raise ValueError("Config: check optimizer")
 
-    for i in fold_indices:
-        print("Fold #", i)
+    model = build_GraphSleepNet(
+        cheb_k,
+        num_of_chev_filters,
+        num_of_time_filters,
+        time_conv_strides,
+        cheb_polynomials,
+        time_conv_kernel,
+        sample_shape,
+        num_block,
+        dense_size,
+        opt,
+        conf_adj == "GL",
+        GLalpha,
+        regularizer,
+        dropout,
+    )
 
-        if fold != 1:
-            # IMPORTANT: fold i as TEST
-            train_all_x, train_all_y, test_x, test_y = DataGen.getFold(i)
+    model.compile(
+        optimizer=opt,
+        loss="binary_crossentropy",
+        metrics=[
+            "accuracy",
+            keras.metrics.AUC(curve="ROC", name="auc_roc"),
+            keras.metrics.AUC(curve="PR", name="auc_pr"),
+        ],
+    )
 
-            train_x, train_y, val_x, val_y = split_train_val(
-                train_all_x, train_all_y,
-                val_frac=val_frac,
-                seed=42 + i
-            )
+    # ========== WANDB INIT ==========
+    run_name = args.run_name if args.run_name else f"graphsleepnet_{mode}_{fold_name}"
 
+    wandb.init(
+        project=cfgTrain.get("project", "spindle-graphsleepsnet"),
+        name=run_name,
+        config={
+            "mode": mode,
+            "fold": args.fold if mode == "groupkfold" else None,
+            "n_folds": args.n_folds if mode == "groupkfold" else None,
+            "lr": learn_rate,
+            "epochs": num_epochs,
+            "batch": batch_size,
+            "context": context,
+            "adj_matrix": conf_adj,
+        }
+    )
 
-        sample_shape = (context, train_x.shape[2], train_x.shape[3])
+    if mode == "single" or (mode == "groupkfold" and fold_idx == 0):
+        model.summary()
 
-        keras.backend.clear_session()
-        gc.collect()
+    # ========== SETUP CALLBACKS ==========
+    best_path = os.path.join(save_dir, f"Best_model_{fold_name}.weights.h5")
+    meta_path = os.path.join(save_dir, f"Best_model_{fold_name}.meta.txt")
 
+    best_f1_ckpt = BestF1Checkpoint(
+        fold_name=fold_name,
+        x_val=X_val,
+        y_val=y_val,
+        best_path=best_path,
+        meta_path=meta_path,
+        batch_size=batch_size,
+    )
 
-        if optimizer_name == "adam":
-            opt = keras.optimizers.Adam(learning_rate=learn_rate)
-        elif optimizer_name == "RMSprop":
-            opt = keras.optimizers.RMSprop(learning_rate=learn_rate)
-        elif optimizer_name == "SGD":
-            opt = keras.optimizers.SGD(learning_rate=learn_rate)
-        else:
-            raise ValueError("Config: check optimizer")
+    epoch_logger = WandbEpochLogger(
+        fold_name=fold_name,
+        x_val=X_val,
+        y_val=y_val,
+        batch_size=batch_size,
+    )
 
-        model = build_GraphSleepNet(
-            cheb_k,
-            num_of_chev_filters,
-            num_of_time_filters,
-            time_conv_strides,
-            cheb_polynomials,
-            time_conv_kernel,
-            sample_shape,
-            num_block,
-            dense_size,
-            opt,
-            conf_adj == "GL",
-            GLalpha,
-            regularizer,
-            dropout,
-        )
+    # ========== TRAIN ==========
+    model.fit(
+        x=X_train,
+        y=y_train,
+        epochs=num_epochs,
+        batch_size=batch_size,
+        shuffle=True,
+        validation_data=(X_val, y_val),
+        callbacks=[best_f1_ckpt, epoch_logger],
+        verbose=1,
+    )
 
-        model.compile(
-            optimizer=opt,
-            loss="binary_crossentropy",
-            metrics=[
-                "accuracy",
-                keras.metrics.AUC(curve="ROC", name="auc_roc"),
-                keras.metrics.AUC(curve="PR", name="auc_pr"),
-            ],
-        )
+    # ========== EVALUATE ON TEST ==========
+    # Load best model
+    if os.path.exists(best_path):
+        model.load_weights(best_path)
+        # Load best threshold
+        best_thr = 0.5
+        if os.path.exists(meta_path):
+            with open(meta_path, 'r') as f:
+                for line in f:
+                    if line.startswith('best_val_thr'):
+                        best_thr = float(line.split('=')[1].strip())
+    else:
+        best_thr = 0.5
 
-        if i == 0:
-            model.summary()
+    # Predict on test
+    test_prob = model.predict(X_test, batch_size=batch_size, verbose=0).reshape(-1)
+    test_true = y_test.reshape(-1)
+    test_bin = (test_prob >= best_thr).astype(int)
 
-        best_path = os.path.join(PathCfg["save"], f"Best_model_{i}.weights.h5")
-        meta_path = os.path.join(PathCfg["save"], f"Best_model_{i}.meta.txt")
-        final_path = os.path.join(PathCfg["save"], f"Final_model_{i}.weights.h5")
+    # Calculate metrics
+    tp, fp, fn, tn = compute_confusion(test_true, test_bin)
+    prec, rec, f1 = precision_recall_f1(tp, fp, fn)
+    roc_fig, pr_fig, roc_auc, pr_auc = plot_roc_pr(test_true, test_prob)
+    cm_fig = plot_confusion(tp, fp, fn, tn, title=f"{fold_name} TEST CM")
 
-        """ckpt = keras.callbacks.ModelCheckpoint(
-            filepath=best_path,
-            monitor="val_auc_pr",
-            save_best_only=True,
-            save_weights_only=True,
-            mode="max",
-            verbose=0,
-        )"""
-        best_f1_ckpt = BestF1Checkpoint(
-            fold_idx=i,
-            x_val=val_x,
-            y_val=val_y,
-            best_path=best_path,
-            meta_path=meta_path,
-            batch_size=batch_size,
-            n_grid=201
-        )
+    print(f"\n{'=' * 60}")
+    print(f"TEST RESULTS - {fold_name}")
+    print(f"{'=' * 60}")
+    print(f"  F1:         {f1:.4f}")
+    print(f"  Precision:  {prec:.4f}")
+    print(f"  Recall:     {rec:.4f}")
+    print(f"  ROC-AUC:    {roc_auc:.4f}")
+    print(f"  PR-AUC:     {pr_auc:.4f}")
+    print(f"  Threshold:  {best_thr:.4f}")
+    print(f"  TP: {tp}, FP: {fp}, FN: {fn}, TN: {tn}")
 
-
-
-        epoch_logger = WandbEpochEvalLogger(
-            fold_idx=i,
-            x_val=val_x,
-            y_val=val_y,
-            batch_size=batch_size,
-        )
-        callbacks = [best_f1_ckpt, epoch_logger]
-
-        model.fit(
-            x=train_x,
-            y=train_y,
-            epochs=num_epochs,
-            batch_size=batch_size,
-            shuffle=True,
-            validation_data=(val_x, val_y),
-           # callbacks=([ckpt, epoch_logger],
-            callbacks = callbacks,
-            verbose=1,
-        )
-
-        model.save_weights(final_path)
-
-        if os.path.exists(best_path):
-            model.load_weights(best_path)
-        else:
-            print(f"[WARN] Best checkpoint not found for fold {i}, using final weights.")
-
-        # ---- Threshold tuning on VAL
-        val_prob = model.predict(val_x, batch_size=batch_size, verbose=0).reshape(-1)
-        val_true = val_y.reshape(-1)
-        best_thr, best_f1, _ = pick_best_threshold(val_true, val_prob, n_grid=201)
-
-        # ---- Evaluate on TEST using best_thr
-        test_prob = model.predict(test_x, batch_size=batch_size, verbose=0).reshape(-1)
-        test_true = test_y.reshape(-1)
-        test_bin = (test_prob >= best_thr).astype(int)
-
-        tp, fp, fn, tn = compute_confusion(test_true, test_bin)
-        prec, rec, f1 = precision_recall_f1(tp, fp, fn)
-        roc_fig, pr_fig, roc_auc, pr_auc = plot_roc_pr(test_y, test_prob)
-        cm_fig = plot_confusion(tp, fp, fn, tn, title=f"Fold {i} TEST CM (thr={best_thr:.2f})")
-        all_fold_pr_aucs.append(pr_auc)
-
-        wandb.log({
-            "epoch": num_epochs,
-
-            f"fold{i}/best_thr_val": best_thr,
-            f"fold{i}/best_f1_val": best_f1,
-            f"fold{i}/test_tp": tp,
-            f"fold{i}/test_fp": fp,
-            f"fold{i}/test_fn": fn,
-            f"fold{i}/test_tn": tn,
-            f"fold{i}/test_precision": prec,
-            f"fold{i}/test_recall": rec,
-            f"fold{i}/test_f1": f1,
-            f"fold{i}/test_roc_auc": roc_auc,
-            f"fold{i}/test_pr_auc": pr_auc,
-            f"fold{i}/test_confusion": wandb.Image(cm_fig),
-            f"fold{i}/test_roc_curve": wandb.Image(roc_fig),
-            f"fold{i}/test_pr_curve": wandb.Image(pr_fig),
-        })
-
-        plt.close(cm_fig)
-        plt.close(roc_fig)
-        plt.close(pr_fig)
-
-        per_fold.append((prec, rec, f1, roc_auc, pr_auc))
+    # Log test results
     wandb.log({
-        "mean_val_pr_auc": float(np.mean(all_fold_pr_aucs)),
-        "std_val_pr_auc": float(np.std(all_fold_pr_aucs)),
+        f"{fold_name}/test_best_thr": best_thr,
+        f"{fold_name}/test_tp": tp,
+        f"{fold_name}/test_fp": fp,
+        f"{fold_name}/test_fn": fn,
+        f"{fold_name}/test_tn": tn,
+        f"{fold_name}/test_precision": prec,
+        f"{fold_name}/test_recall": rec,
+        f"{fold_name}/test_f1": f1,
+        f"{fold_name}/test_roc_auc": roc_auc,
+        f"{fold_name}/test_pr_auc": pr_auc,
+        f"{fold_name}/test_confusion": wandb.Image(cm_fig),
+        f"{fold_name}/test_roc_curve": wandb.Image(roc_fig),
+        f"{fold_name}/test_pr_curve": wandb.Image(pr_fig),
     })
 
-    # Summary mean±std
-    per_fold = np.array(per_fold, dtype=float)
-    mean = np.nanmean(per_fold, axis=0)
-    std = np.nanstd(per_fold, axis=0)
+    plt.close(cm_fig)
+    plt.close(roc_fig)
+    plt.close(pr_fig)
 
-    summary = {
-        "mean_test_precision": mean[0], "std_test_precision": std[0],
-        "mean_test_recall": mean[1], "std_test_recall": std[1],
-        "mean_test_f1": mean[2], "std_test_f1": std[2],
-        "mean_test_roc_auc": mean[3], "std_test_roc_auc": std[3],
-        "mean_test_pr_auc": mean[4], "std_test_pr_auc": std[4],
+    # ========== SAVE RESULTS ==========
+    results = {
+        'mode': mode,
+        'fold': args.fold if mode == "groupkfold" else None,
+        'n_folds': args.n_folds if mode == "groupkfold" else None,
+        'test_metrics': {
+            'f1': float(f1),
+            'precision': float(prec),
+            'recall': float(rec),
+            'roc_auc': float(roc_auc),
+            'pr_auc': float(pr_auc),
+            'threshold': float(best_thr),
+            'tp': int(tp),
+            'fp': int(fp),
+            'fn': int(fn),
+            'tn': int(tn),
+        }
     }
 
-    print("\n===  Final Result (TEST, best thr from VAL) ===")
-    for k, v in summary.items():
-        print(f"{k}: {v:.4f}")
+    out_dir = os.path.join(save_dir, "graph_results")
+    os.makedirs(out_dir, exist_ok=True)
 
-    wandb.summary.update(summary)
+    if mode == "single":
+        out_file = os.path.join(out_dir, "single_subject_results.json")
+    else:
+        out_file = os.path.join(out_dir, f"fold_{args.fold}_of_{args.n_folds}_results.json")
+
+    with open(out_file, 'w') as f:
+        json.dump(results, f, indent=2)
+
+    print(f"\nResults saved to {out_file}")
     wandb.finish()
 
 

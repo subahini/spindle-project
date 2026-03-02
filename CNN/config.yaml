@@ -1,44 +1,65 @@
+# config70.yaml - FIXED CNN Configuration
+
 # ===============================
 # DATA MODE
 # ===============================
 data_mode: "single_subject_edf"
-
-
+# or
+# ===============================
+# SUBJECT FILES (IMPORTANT: files split BEFORE windowing)
+# ===============================
 subject_files:
-  - edf_dir: "/data/subahini.nadarajh/data/P002/edf"
-    json_dir: "/data/subahini.nadarajh/data/P002/labels"
+  # Add ALL your EDF + JSON pairs here
+  # Minimum 5 files recommended for proper train/val/test split
+  - edf: "../data/raw/P002_1_raw.edf"
+    json: "../data/labels/sleep_block_spindle_output_P002_1.json"
+  - edf: "../data/raw/P002_2_raw.edf"
+    json: "../data/labels/sleep_block_spindle_output_P002_2.json"
+  - edf: "../data/raw/P002_3_raw.edf"
+    json: "../data/labels/sleep_block_spindle_output_P002_3.json"
 
 
+
+#data_mode: "full_dataset_npy"
+npy_data:
+  data_dir: "/path/to/processed_data"
+  x_file: "X_all.npy"
+  y_file: "y_all.npy"
+
+# ===============================
+# CHANNELS (CRNN-style)
+# ===============================
 channels:
   use_channel_names: true
-  names:
-    ["C3","C4","O1","O2","Fp1","Fp2","F7","F3","Fz","F4","F8",
-     "T3","T4","T5","T6","P3","Pz","P4","Oz"]
-  n_channels: 19
+  names: ["C3", "C4", "O1", "O2", "Fp1", "Fp2", "F7", "F3", "Fz", "F4", "F8",
+          "T3", "T4", "T5", "T6", "P3", "Pz", "P4", "Oz"]
+  n_channels: 19  # Used if names is empty
 
+# ===============================
+# FILTERING (spindle band)
+# ===============================
 filter:
   hp_freq: 1.0
   lp_freq: 30.0
 
+# ===============================
+# WINDOWING PARAMETERS
+# ===============================
 windowing:
-  window_sec: 2.0
-  step_sec: 1.0
-  overlap_threshold: 0.3
+  window_sec: 5cd CNN.0
+  step_sec: 1.0  # 50% overlap
+  overlap_threshold: 0.3  # Label=1 if >=30% spindle samples
 
+# ===============================
+# TRAIN/VAL/TEST SPLIT
+# ===============================
 splits:
-  # ---- SINGLE SUBJECT (P002 only) ----
-  # Use this for sweeps & debugging
-  n_folds: 1
-  fold: 1
-
-  # ---- MULTI SUBJECT (P002, P003, …) ----
-  # n_folds: 5
-  # fold: 1   # change 1..5 to run different folds
-
+  # Files are split FIRST (prevents data leakage!)
+  test_size: 0.20
+  val_size: 0.20
   random_state: 42
 
 # ===============================
-# TRAINING
 # MODEL ARCHITECTURE
 # ===============================
 model:
@@ -56,7 +77,6 @@ training:
   early_stopping_patience: 9999
 
 # ===============================
-# LOSS
 # LOSS FUNCTION (Simplified - pick ONE strategy)
 # ===============================
 loss:
@@ -103,10 +123,7 @@ device:
 # ===============================
 wandb:
   enabled: true
-  project: "Final_sweep_CNN"
+  project: "spindle_cnn2d"
   entity: "subahininadarajh-basel-university"
-
   run_name: null    # or "cnn_debug" or anything you like
   log_val_plots_every: 1
-  sweep_id:  f5kbswxs
-

@@ -134,12 +134,12 @@ def extract_DE(edf_path, stft_para, cache_dir='./data/cache_de/'):
 # 4.  Read spindle labels from JSON for one file
 #     Returns (n_windows, 1) int32
 # ===========================================================================
-"""
+
 def read_labels(stem, labels_dir, n_windows, window_sec=2.0, overlap_thr_sec=0.5):
-    
+    """
     A window is labelled 1 if any detected spindle overlaps it by
     >= overlap_thr_sec seconds.
-   
+    """
     json_path = os.path.join(labels_dir,
                              f"sleep_block_spindle_output_{stem}.json")
     if not os.path.isfile(json_path):
@@ -164,59 +164,20 @@ def read_labels(stem, labels_dir, n_windows, window_sec=2.0, overlap_thr_sec=0.5
         if np.any(overlap >= overlap_thr_sec):
             y[i, 0] = 1
 
-    return y"""  # this is window lwvewl
-
-
-def read_labels_timepoint(stem, labels_dir, n_windows, window_sec=2.0, fs=200):
-    """
-    Returns (n_windows, samples_per_window) int32
-    Each time point is labeled 1 if it falls within a spindle event.
-    """
-    json_path = os.path.join(labels_dir,
-                             f"sleep_block_spindle_output_{stem}.json")
-    if not os.path.isfile(json_path):
-        raise FileNotFoundError(f"Label JSON not found: {json_path}")
-
-    with open(json_path) as f:
-        J = json.load(f)
-
-    spindles = J.get("detected_spindles", [])
-    samples_per_window = int(window_sec * fs)
-
-    # Initialize: (n_windows, samples_per_window)
-    y = np.zeros((n_windows, samples_per_window), dtype=np.int32)
-
-    if len(spindles) == 0:
-        return y
-
-    for spindle in spindles:
-        start_sec = spindle["start"]
-        end_sec = spindle["end"]
-
-        # Convert to sample indices
-        start_sample = int(start_sec * fs)
-        end_sample = int(end_sec * fs)
-
-        # Mark all time points within spindle as 1
-        for sample_idx in range(start_sample, end_sample):
-            window_idx = sample_idx // samples_per_window
-            within_window_idx = sample_idx % samples_per_window
-
-            if window_idx < n_windows:
-                y[window_idx, within_window_idx] = 1
-
     return y
+
+
 # ===========================================================================
 # 5.  Process one subject (all its EDF blocks) → concatenated data + labels
 # ===========================================================================
-"""
+
 def process_subject(stems, raw_dir, labels_dir, stft_para, cache_dir):
-    
+    """
     For one subject, process all blocks, stack them vertically.
     Returns:
         data   (total_windows, n_channels, n_bands)
         labels (total_windows, 1)
-   
+    """
     all_data  = []
     all_label = []
 
@@ -243,38 +204,9 @@ def process_subject(stems, raw_dir, labels_dir, stft_para, cache_dir):
 
     data   = np.concatenate(all_data,  axis=0)
     labels = np.concatenate(all_label, axis=0)
-    return data, labels"""   # window level
-
-
-def process_subject(stems, raw_dir, labels_dir, stft_para, cache_dir):
-    all_data = []
-    all_label = []
-
-    for stem in stems:
-        edf_path = os.path.join(raw_dir, stem + '_raw.edf')
-        print(f"    {stem} ...", end=' ', flush=True)
-
-        de = extract_DE(edf_path, stft_para, cache_dir=cache_dir)
-        n_win = de.shape[0]
-
-        # NEW: time-point labels
-        label = read_labels_timepoint(stem, labels_dir, n_win,
-                                      window_sec=stft_para['window'],
-                                      fs=stft_para['fs'])
-
-        assert de.shape[0] == label.shape[0], (
-            f"{stem}: feature windows={de.shape[0]}, label windows={label.shape[0]}"
-        )
-
-        all_data.append(de)
-        all_label.append(label)
-
-        spindle_ratio = label.mean()
-        print(f"windows={n_win}  spindle_ratio={spindle_ratio:.3f}")
-
-    data = np.concatenate(all_data, axis=0)
-    labels = np.concatenate(all_label, axis=0)
     return data, labels
+
+
 # ===========================================================================
 # 6.  Main
 # ===========================================================================
@@ -282,8 +214,8 @@ def process_subject(stems, raw_dir, labels_dir, stft_para, cache_dir):
 if __name__ == "__main__":
 
     # --- paths -----------------------------------------------------------
-    RAW_DIR = '../P002/edf/'
-    LABELS_DIR = '../P002/labels/'
+    RAW_DIR = './P002/edf/'
+    LABELS_DIR = './P002/labels/'
   #  RAW_DIR    = '../data/raw/'
    # LABELS_DIR = '../data/labels/'
     SAVE_PATH  = './data/SS3_DE_19channels.npz'

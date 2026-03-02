@@ -9,9 +9,9 @@ code/model
 code/results
 code/data
 .idea
-P002/
-**/edf/
-*.edf
+
+
+
 
 cat > .gitignore << EOF
 # Python
@@ -38,14 +38,3 @@ cat > .gitignore << EOF
 EOF
 
 .ipynb_checkpoints
-
-models/
-checkpoints/
-*.pt
-*.pth
-*.ckpt
-*.ipynb
-
-wandb/
-results/
-logs/

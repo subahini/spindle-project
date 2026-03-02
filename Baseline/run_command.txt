@@ -1,20 +1,14 @@
-# Run on all 4 channels for one subject/file
+Step 1:
+
+wandb sweep --project spindel_debug --entity subahininadarajh-basel-university sweep.yaml                ----------------# please Copy the sweep ID
+
+example :
+80wvtkz2 is sweep id (my sweep id...  change it to yours )
+wandb agent subahininadarajh-basel-university/spindle-project-Baseline/80wvtkz2
 
 
-python schimicek_evaluation.py --config config.yaml --mode single --subject P002
+Step 2:
 
-# to run sweep
-
-wandb sweep --project Final_baseline_sweep --entity subahininadarajh-basel-university sweep.yaml                ----------------# please Copy the sweep ID                                 or
-
-wandb agent subahininadarajh-basel-university/Final_baseline_sweep/3nzenvdc
-
-
-
-# Run on all channels for all files in a fold
-python run_schimicek_all_channels.py --config config.yaml --fold 1
-
-# Run all 5 folds
-for fold in {1..5}; do
-    python chimicek_evalution.py --config config.yaml --fold $fold
-done
+then run :tmux new -s schimicek_sweep wandb agent subahininadarajh-basel-university/spindel_debug/abc123xy
+                                    or
+wandb agent subahininadarajh-basel-university/spindel_debug/abc123xy

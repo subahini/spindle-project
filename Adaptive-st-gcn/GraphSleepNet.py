@@ -406,7 +406,7 @@ def build_GraphSleepNet(k, num_of_chev_filters, num_of_time_filters, time_conv_s
     block_out = GraphSleepBlock(data_layer,k, num_of_chev_filters, num_of_time_filters, time_conv_strides, cheb_polynomials, time_conv_kernel,useGL,GLalpha)
     for i in range(1,num_block):
         block_out = GraphSleepBlock(block_out,k,num_of_chev_filters,num_of_time_filters,1,cheb_polynomials,time_conv_kernel,useGL,GLalpha,i)
-    """    
+        
     # Global dense layer
     block_out = layers.Flatten()(block_out)
     for size in dense_size:
@@ -421,7 +421,7 @@ def build_GraphSleepNet(k, num_of_chev_filters, num_of_time_filters, time_conv_s
     
     # softmax classification
     # changing this to spindel classification
-    softmax = layers.Dense(5,activation='softmax',kernel_regularizer=regularizer)(block_out)
+    """softmax = layers.Dense(5,activation='softmax',kernel_regularizer=regularizer)(block_out)
     
     model = models.Model(inputs = data_layer, outputs = softmax)
     
@@ -429,45 +429,13 @@ def build_GraphSleepNet(k, num_of_chev_filters, num_of_time_filters, time_conv_s
         optimizer=opt,
         loss='categorical_crossentropy',
         metrics=['acc'],
-    )
+    )"""
     sigmoid = layers.Dense(1, activation='sigmoid', kernel_regularizer=regularizer)(block_out)
-     
     model = models.Model(inputs=data_layer, outputs=sigmoid)
     model.compile(
         optimizer=opt,
         loss='binary_crossentropy',
         metrics=['acc'])
-                      """  # ---------------- >  this is window level
-
-    # block_out shape: (B, T=context, V=channels, C=num_of_time_filters)
-
-    # compress (V, C) per timestep -> a feature vector per timestep
-    T = block_out.shape[1]  # should be context (static)
-    VC = block_out.shape[2] * block_out.shape[3]
-
-    x = layers.Reshape((T, VC))(block_out)  # (B, T, V*C)
-
-    # optional small per-timestep MLP
-    x = layers.TimeDistributed(layers.Dense(64, activation="relu"))(x)
-    if dropout != 0:
-        x = layers.Dropout(dropout)(x)
-
-    # per-timestep sigmoid output
-    y = layers.TimeDistributed(
-        layers.Dense(1, activation="sigmoid", kernel_regularizer=regularizer)
-    )(x)  # (B, T, 1)
-
-    model = models.Model(inputs=data_layer, outputs=y)
-
-    model.compile(
-        optimizer=opt,
-        loss="binary_crossentropy",
-        metrics=[
-            keras.metrics.BinaryAccuracy(name="acc"),
-            keras.metrics.AUC(curve="ROC", name="auc_roc"),
-            keras.metrics.AUC(curve="PR", name="auc_pr"),
-        ],
-    )
 
     return model
 
@@ -494,5 +462,5 @@ def build_GraphSleepNet_test():
     return model
 
 
-#build_GraphSleepNet_test()
+# build_GraphSleepNet_test()
 

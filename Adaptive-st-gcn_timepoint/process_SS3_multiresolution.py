@@ -234,8 +234,8 @@ def process_subject_multireso(stems, raw_dir, labels_dir, stft_para, cache_dir):
 if __name__ == "__main__":
     
     # Paths
-    RAW_DIR = '../P002/edf/'
-    LABELS_DIR = '../P002/labels/'
+    RAW_DIR = './P002/edf/'
+    LABELS_DIR = './P002/labels/'
     SAVE_PATH = './data/SS3_multireso_19channels.npz'
     CACHE_DIR = './data/cache_multireso/'
     
